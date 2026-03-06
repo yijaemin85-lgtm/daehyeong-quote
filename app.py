@@ -39,12 +39,17 @@ def num_to_kor(num):
 def generate_pdf(client, project, items, remark, valid_date, total_sum):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    font = 'Helvetica'
-    p = "C:/Windows/Fonts/malgun.ttf"
-    if os.path.exists(p):
-        pdfmetrics.registerFont(TTFont('Malgun', p))
-        font = 'Malgun'
     
+    # --- [폰트 설정] 서버에 올린 나눔스퀘어 파일로 변경 ---
+    font = 'Helvetica' # 기본값
+    # 깃허브에 올리신 파일명과 대소문자까지 똑같아야 합니다.
+    p = "NanumSquareR.ttf" 
+    
+    if os.path.exists(p):
+        pdfmetrics.registerFont(TTFont('NanumFont', p))
+        font = 'NanumFont'
+    # -----------------------------------------------
+
     c.setFont(font, 25); c.drawCentredString(300, 800, "견    적    서")
     c.setFont(font, 10)
     c.drawString(50, 750, f"일자: {datetime.now().strftime('%Y-%m-%d')}")
