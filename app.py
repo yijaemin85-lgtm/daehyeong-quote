@@ -10,70 +10,80 @@ import os
 import hashlib
 import json
 import uuid
-import gspread
-from google.oauth2.service_account import Credentials
+import requests
 
 # ─────────────────────────────────────────
-# [Google Sheets 연결]
+# [Apps Script 연동 헬퍼]
 # ─────────────────────────────────────────
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+GAS_URL = st.secrets["apps_script_url"]
 
-@st.cache_resource
-def get_gspread_client():
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"], scopes=SCOPES
-    )
-    return gspread.authorize(creds)
-
-def get_sheet(sheet_name: str):
-    gc = get_gspread_client()
-    sh = gc.open_by_key(st.secrets["spreadsheet_id"])
+def gas_post(payload: dict) -> dict:
     try:
-        return sh.worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=sheet_name, rows=1000, cols=30)
-        return ws
+        resp = requests.post(GAS_URL, json=payload, timeout=30)
+        return resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def get_sheet_data(sheet_name: str) -> list:
+    res = gas_post({"action": "get_sheet", "sheet_name": sheet_name})
+    if res.get("status") == "ok":
+        return res.get("data", [])
+    return []
+
+def append_row(sheet_name: str, row: list):
+    gas_post({"action": "append_row", "sheet_name": sheet_name, "row": row})
+
+def update_cell(sheet_name: str, row_index: int, col_index: int, value):
+    gas_post({
+        "action": "update_cell",
+        "sheet_name": sheet_name,
+        "row_index": row_index,
+        "col_index": col_index,
+        "value": str(value)
+    })
 
 # ─────────────────────────────────────────
-# [유틸 함수]
+# [유저 관련]
 # ─────────────────────────────────────────
+USER_SHEET = "users"
+USER_HEADER = ["username", "password_hash", "name", "role", "active"]
+
 def hash_pw(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
 def load_users() -> pd.DataFrame:
-    ws = get_sheet("users")
-    data = ws.get_all_records()
+    data = get_sheet_data(USER_SHEET)
+    if len(data) < 2:
+        return pd.DataFrame(columns=USER_HEADER)
+    headers = data[0]
+    rows = data[1:]
+    return pd.DataFrame(rows, columns=headers)
+
+def init_users_sheet():
+    data = get_sheet_data(USER_SHEET)
     if not data:
-        return pd.DataFrame(columns=["username", "password_hash", "name", "role", "active"])
-    return pd.DataFrame(data)
+        append_row(USER_SHEET, USER_HEADER)
+        admin_pw = st.secrets.get("admin_init_password", "admin1234")
+        append_row(USER_SHEET, ["admin", hash_pw(admin_pw), "관리자", "admin", "True"])
 
 def save_user(username, password_hash, name, role="employee", active=True):
-    ws = get_sheet("users")
-    if not ws.get_all_values():
-        ws.append_row(["username", "password_hash", "name", "role", "active"])
-    ws.append_row([username, password_hash, name, role, str(active)])
+    data = get_sheet_data(USER_SHEET)
+    if not data:
+        append_row(USER_SHEET, USER_HEADER)
+    append_row(USER_SHEET, [username, password_hash, name, role, str(active)])
 
-def update_user_in_sheet(username, field, value):
-    ws = get_sheet("users")
-    records = ws.get_all_records()
-    headers = ws.row_values(1)
+def update_user_field(username: str, field: str, value):
+    data = get_sheet_data(USER_SHEET)
+    if not data:
+        return
+    headers = data[0]
     if field not in headers:
         return
     col_idx = headers.index(field) + 1
-    for i, row in enumerate(records, start=2):
-        if row["username"] == username:
-            ws.update_cell(i, col_idx, str(value))
+    for i, row in enumerate(data[1:], start=2):
+        if row[0] == username:
+            update_cell(USER_SHEET, i, col_idx, value)
             break
-
-def init_users_sheet():
-    ws = get_sheet("users")
-    if not ws.get_all_values():
-        ws.append_row(["username", "password_hash", "name", "role", "active"])
-        admin_pw = st.secrets.get("admin_init_password", "admin1234")
-        ws.append_row(["admin", hash_pw(admin_pw), "관리자", "admin", "True"])
 
 def authenticate(username, password):
     df = load_users()
@@ -90,6 +100,7 @@ def authenticate(username, password):
 # ─────────────────────────────────────────
 # [견적 이력 로그]
 # ─────────────────────────────────────────
+LOG_SHEET = "quote_logs"
 LOG_HEADER = [
     "log_id", "timestamp", "username", "user_name",
     "client", "project", "valid_date",
@@ -98,21 +109,22 @@ LOG_HEADER = [
 ]
 
 def load_logs() -> pd.DataFrame:
-    ws = get_sheet("quote_logs")
-    data = ws.get_all_records()
-    if not data:
+    data = get_sheet_data(LOG_SHEET)
+    if len(data) < 2:
         return pd.DataFrame(columns=LOG_HEADER)
-    return pd.DataFrame(data)
+    headers = data[0]
+    rows = data[1:]
+    return pd.DataFrame(rows, columns=headers)
 
 def append_log(user: dict, client: str, project: str, valid_date: str,
                items: list, total: float):
-    ws = get_sheet("quote_logs")
-    if not ws.get_all_values():
-        ws.append_row(LOG_HEADER)
+    data = get_sheet_data(LOG_SHEET)
+    if not data:
+        append_row(LOG_SHEET, LOG_HEADER)
     log_id = str(uuid.uuid4())[:8]
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     items_json = json.dumps(items, ensure_ascii=False)
-    ws.append_row([
+    append_row(LOG_SHEET, [
         log_id, ts,
         user["username"], user["name"],
         client, project, valid_date,
@@ -121,15 +133,16 @@ def append_log(user: dict, client: str, project: str, valid_date: str,
     ])
 
 def update_log_field(log_id: str, field: str, value):
-    ws = get_sheet("quote_logs")
-    records = ws.get_all_records()
-    headers = ws.row_values(1)
+    data = get_sheet_data(LOG_SHEET)
+    if not data:
+        return
+    headers = data[0]
     if field not in headers:
         return
     col_idx = headers.index(field) + 1
-    for i, row in enumerate(records, start=2):
-        if row["log_id"] == log_id:
-            ws.update_cell(i, col_idx, str(value))
+    for i, row in enumerate(data[1:], start=2):
+        if row[0] == log_id:
+            update_cell(LOG_SHEET, i, col_idx, value)
             break
 
 # ─────────────────────────────────────────
@@ -144,7 +157,6 @@ WASTE_DATA = {
     "불연성+가연성(5%이하)": 188715,
     "기타+가연성(5%이하)": 192887,
 }
-
 TRANSPORT_TABLE = {
     "30km": 20340, "35km": 22270,
     "40km": 24130, "50km": 27940, "60km": 31690
@@ -189,7 +201,6 @@ def generate_pdf(client, project, items, remark, valid_date, total_sum, author_n
     if os.path.exists("stamp.png"):
         c.drawImage("stamp.png", 440, 715, width=35, height=35, mask="auto")
     c.drawString(345, 705, "주 소 : 충남 논산시 벌곡면 대둔로 1290-23")
-    c.setFont(font, 10)
     c.drawString(345, 688, f"작성자 : {author_name}")
     c.setFont(font, 12)
     c.drawString(50, 650, f"합계금액: 일금 {num_to_kor(total_sum)} (\u20a9 {total_sum:,.0f} / VAT별도)")
@@ -255,9 +266,11 @@ def show_admin():
     st.title("⚙️ 관리자 대시보드")
     tab_users, tab_logs, tab_stats = st.tabs(["👥 사원 관리", "📋 견적 이력", "📊 통계 분석"])
 
+    # ── 사원 관리 ──
     with tab_users:
         st.subheader("👥 사원 계정 관리")
         df_users = load_users()
+
         with st.expander("➕ 신규 사원 추가", expanded=False):
             with st.form("add_user_form"):
                 c1, c2 = st.columns(2)
@@ -287,13 +300,14 @@ def show_admin():
                     new_pw2 = st.text_input("새 비밀번호", type="password")
                     col_ok, col_cancel = st.columns(2)
                     if col_ok.form_submit_button("변경"):
-                        update_user_in_sheet(target, "password_hash", hash_pw(new_pw2))
+                        update_user_field(target, "password_hash", hash_pw(new_pw2))
                         del st.session_state["reset_target"]
                         st.success("비밀번호가 변경되었습니다.")
                         st.rerun()
                     if col_cancel.form_submit_button("취소"):
                         del st.session_state["reset_target"]
                         st.rerun()
+
             for _, row in df_users.iterrows():
                 active = str(row["active"]) == "True"
                 badge = "🟢" if active else "🔴"
@@ -307,9 +321,10 @@ def show_admin():
                     if row["username"] != "admin":
                         label = "비활성화" if active else "활성화"
                         if cc4.button(label, key=f"toggle_{row['username']}"):
-                            update_user_in_sheet(row["username"], "active", str(not active))
+                            update_user_field(row["username"], "active", str(not active))
                             st.rerun()
 
+    # ── 견적 이력 ──
     with tab_logs:
         st.subheader("📋 전체 견적 이력")
         df_logs = load_logs()
@@ -325,6 +340,7 @@ def show_admin():
                 filtered = filtered[filtered["user_name"] == sel_user]
             if sel_contract != "전체":
                 filtered = filtered[filtered["contract_done"] == sel_contract]
+
             for _, row in filtered.sort_values("timestamp", ascending=False).iterrows():
                 with st.container(border=True):
                     h1, h2 = st.columns([4, 1])
@@ -339,6 +355,7 @@ def show_admin():
                     )
                     status = row["contract_done"]
                     h2.markdown(f"{'🟢' if status == '계약완료' else '🔴'} **{status}**")
+
                     if status == "미계약":
                         with st.expander("✅ 계약 완료 처리"):
                             with st.form(f"contract_{row['log_id']}"):
@@ -362,6 +379,7 @@ def show_admin():
                         except Exception:
                             st.info("계약 정보를 불러오는 중 오류가 발생했습니다.")
 
+    # ── 통계 ──
     with tab_stats:
         st.subheader("📊 통계 분석")
         df_logs = load_logs()
@@ -371,20 +389,24 @@ def show_admin():
             df_logs["total_amount"] = pd.to_numeric(df_logs["total_amount"], errors="coerce")
             df_logs["contract_amount"] = pd.to_numeric(df_logs["contract_amount"], errors="coerce")
             df_logs["timestamp"] = pd.to_datetime(df_logs["timestamp"], errors="coerce")
+
             col1, col2, col3 = st.columns(3)
             col1.metric("총 견적 건수", f"{len(df_logs)}건")
             contract_df = df_logs[df_logs["contract_done"] == "계약완료"]
             col2.metric("계약 완료", f"{len(contract_df)}건")
             rate = len(contract_df) / len(df_logs) * 100 if len(df_logs) else 0
             col3.metric("계약 성공률", f"{rate:.1f}%")
+
             st.markdown("---")
             st.markdown("#### 월별 견적 건수 추이")
             df_logs["month"] = df_logs["timestamp"].dt.to_period("M").astype(str)
             monthly = df_logs.groupby("month").size().reset_index(name="건수")
             st.bar_chart(monthly.set_index("month"))
+
             st.markdown("#### 사원별 견적 건수")
             by_user = df_logs.groupby("user_name").size().reset_index(name="건수")
             st.bar_chart(by_user.set_index("user_name"))
+
             if not contract_df.empty:
                 st.markdown("#### 견적 vs 실계약 금액 비교")
                 cmp_df = contract_df[["timestamp", "client", "total_amount", "contract_amount"]].copy()
@@ -393,7 +415,7 @@ def show_admin():
                 st.dataframe(cmp_df[["timestamp", "client", "total_amount", "contract_amount", "차이", "차이율(%)"]], use_container_width=True)
 
 # ─────────────────────────────────────────
-# [일반 사원 페이지 – 견적 작성]
+# [일반 사원 페이지]
 # ─────────────────────────────────────────
 def show_main():
     user = st.session_state["user"]
@@ -405,16 +427,20 @@ def show_main():
     if st.sidebar.button("🚪 로그아웃"):
         st.session_state.clear()
         st.rerun()
+
     if "q_items" not in st.session_state:
         st.session_state["q_items"] = []
+
     st.title("📄 대형환경(주) 통합 견적 시스템")
     col_l, col_r = st.columns([1, 1.2])
+
     with col_l:
         st.subheader("🛠️ 견적 데이터 입력")
         client     = st.text_input("수신처", placeholder="입력하세요 (예: OO설계사무소)")
         project    = st.text_input("공사명", placeholder="입력하세요 (예: 세종시 OO공사)")
         valid_date = st.text_input("유효기간",
             (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
+
         t_w, t_a = st.tabs(["♻️ 폐기물 처리", "🪨 순환골재 납품"])
         with t_w:
             w_type    = st.selectbox("폐기물 성상", list(WASTE_DATA.keys()))
@@ -430,6 +456,7 @@ def show_main():
                     "수량": w_qty, "단위": "ton",
                     "단가": unit, "금액": unit * w_qty,
                 })
+
         with t_a:
             a_spec  = st.text_input("골재 규격", value="40mm (도로기층용)")
             a_qty   = st.number_input("수량(m³)", min_value=0.0, value=1.00, step=0.01, format="%.2f")
@@ -440,10 +467,12 @@ def show_main():
                     "수량": a_qty, "단위": "m³",
                     "단가": a_price, "금액": a_qty * a_price,
                 })
+
         rem_txt = st.text_area("비고 내용", "1. 부가세 별도.\n2. 상차비 별도.\n3. 25.5톤 덤프 용적 17㎡ 적용.")
         if st.button("🗑️ 전체 내역 삭제"):
             st.session_state["q_items"] = []
             st.rerun()
+
     with col_r:
         st.subheader("🔍 견적 미리보기")
         if st.session_state["q_items"]:
@@ -454,6 +483,7 @@ def show_main():
                 if c2.button("삭제", key=f"del_{i}"):
                     st.session_state["q_items"].pop(i)
                     st.rerun()
+
             total = sum(item["금액"] for item in st.session_state["q_items"])
             with st.container(border=True):
                 st.markdown("<h2 style='text-align:center;'>견 적 서</h2>", unsafe_allow_html=True)
@@ -461,6 +491,7 @@ def show_main():
                 st.write(f"**합계금액:** 일금 {num_to_kor(total)}")
                 st.table(pd.DataFrame(st.session_state["q_items"]).style.format({"수량": "{:,.2f}", "단가": "{:,.0f}", "금액": "{:,.0f}"}))
                 st.info(rem_txt)
+
             pdf = generate_pdf(client, project, st.session_state["q_items"], rem_txt, valid_date, total, user["name"])
             if st.download_button("📥 정식 PDF 다운로드", pdf, f"견적서_{client}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"):
                 append_log(user, client, project, valid_date, st.session_state["q_items"], total)
