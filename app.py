@@ -15,10 +15,9 @@ import requests
 # ─────────────────────────────────────────
 # [Apps Script 연동 헬퍼]
 # ─────────────────────────────────────────
-GAS_URL = st.secrets["apps_script_url"]
-
 def gas_post(payload: dict) -> dict:
     try:
+        GAS_URL = st.secrets["apps_script_url"]
         resp = requests.post(GAS_URL, json=payload, timeout=30)
         return resp.json()
     except Exception as e:
@@ -508,3 +507,4 @@ elif st.session_state.get("page") == "admin":
     show_admin()
 else:
     show_main()
+
