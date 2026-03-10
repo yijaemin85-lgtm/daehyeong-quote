@@ -237,9 +237,7 @@ def show_admin_page():
     if st.button("← 메인으로 돌아가기"):
         st.session_state["page"] = "main"
         st.rerun()
-
     tab1, tab2 = st.tabs(["👥 사원 관리", "📋 견적 이력"])
-
     with tab1:
         st.subheader("사원 목록")
         df = load_users(use_cache=False)
@@ -266,8 +264,7 @@ def show_admin_page():
                         if c2.button("❌ 취소", key=f"confirm_no_{row['username']}"):
                             st.session_state.pop(f"confirm_del_{row['username']}", None)
                             st.rerun()
-
-        st.divider()
+                st.divider()
         st.subheader("신규 사원 추가")
         with st.form("add_user_form"):
             new_username = st.text_input("아이디")
@@ -286,7 +283,6 @@ def show_admin_page():
                         save_user(new_username, hash_pw(new_password), new_name, new_role)
                         st.success(f"{new_name} ({new_username}) 계정이 추가되었습니다.")
                         st.rerun()
-
     with tab2:
         st.subheader("견적 이력")
         logs = load_logs()
@@ -323,7 +319,6 @@ def show_admin_page():
 def show_main_page():
     user = st.session_state["user"]
     role_label = "관리자" if user["role"] == "admin" else "일반"
-
     with st.sidebar:
         st.markdown(f"### {'🟢' if user['role']=='admin' else '🔵'} {user['name']} 님")
         st.caption(f"권한: {role_label}")
@@ -347,7 +342,6 @@ def show_main_page():
     with col_left:
         st.subheader("🔧 견적 데이터 입력")
 
-        # 기본 정보 - form으로 묶어서 rerun 최소화
         with st.form("basic_info_form", clear_on_submit=False):
             client = st.text_input("수신처", value=st.session_state.get("client",""), placeholder="입력하세요 (예: OO설계사무소)")
             project = st.text_input("공사명", value=st.session_state.get("project",""), placeholder="입력하세요 (예: 세종시 OO공사)")
@@ -359,7 +353,6 @@ def show_main_page():
                 st.session_state["project"] = project
                 st.session_state["valid_date"] = valid_date
 
-        # 실제 표시용 값
         client = st.session_state.get("client", "")
         project = st.session_state.get("project", "")
         valid_date = st.session_state.get("valid_date", (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
@@ -383,8 +376,9 @@ def show_main_page():
                     amount = int(unit_price * qty)
                     dist_label = dist_mode if dist_mode != "60km 초과" else f"L={extra_dist}km"
                     st.session_state["waste_items"].append({
-                        "품명": waste_type, "규격": dist_label, "수량": qty,
-                        "단위": "ton", "단가": unit_price, "금액": amount
+                        "품명": waste_type, "규격": dist_label,
+                        "수량": qty, "단위": "ton",
+                        "단가": unit_price, "금액": amount
                     })
                     st.rerun()
 
@@ -399,8 +393,9 @@ def show_main_page():
                 if recycled_add:
                     amount = int(recycled_price * recycled_qty)
                     st.session_state["recycled_items"].append({
-                        "품명": recycled_name, "규격": recycled_spec, "수량": recycled_qty,
-                        "단위": recycled_unit, "단가": recycled_price, "금액": amount
+                        "품명": recycled_name, "규격": recycled_spec,
+                        "수량": recycled_qty, "단위": recycled_unit,
+                        "단가": recycled_price, "금액": amount
                     })
                     st.rerun()
 
@@ -422,9 +417,7 @@ def show_main_page():
         total = sum(i["금액"] for i in all_items)
 
         remark_default = "1. 부가세 별도.\n2. 상차비 별도.\n3. 25.5톤 덤프 용적 17㎥ 적용."
-        remark = st.text_area("비고", value=st.session_state.get("remark", remark_default), height=80, key="remark_input")
-        if remark != st.session_state.get("remark", remark_default):
-            st.session_state["remark"] = remark
+        remark = st.text_area("비고", value=st.session_state.get("remark_input", remark_default), height=80, key="remark_input")
 
         st.divider()
 
@@ -450,19 +443,23 @@ def show_main_page():
 </div>
 """, unsafe_allow_html=True)
 
-            # PDF 미리 생성해서 바로 다운로드 버튼 제공 (클릭 1번으로 바로 저장)
-            pdf_buf = generate_pdf(client, project, all_items, remark, valid_date, total, user["name"])
+            actual_remark = st.session_state.get("remark_input", remark_default)
+            pdf_buf = generate_pdf(client, project, all_items, actual_remark, valid_date, total, user["name"])
             fname = f"견적서_{client}_{datetime.now().strftime('%Y%m%d')}.pdf"
 
-            if st.download_button(
-                label="📄 정식 PDF 다운로드",
-                data=pdf_buf,
-                file_name=fname,
-                mime="application/pdf",
-                use_container_width=True
-            ):
-                append_log(user, client, project, valid_date, all_items, total)
-
+            col_pdf, col_log = st.columns(2)
+            with col_pdf:
+                st.download_button(
+                    label="📄 PDF 다운로드",
+                    data=pdf_buf,
+                    file_name=fname,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            with col_log:
+                if st.button("📝 견적 저장(로그기록)", use_container_width=True):
+                    append_log(user, client, project, valid_date, all_items, total)
+                    st.success("견적이 로그에 저장되었습니다!")
         else:
             st.info("항목을 추가하면 견적서 미리보기가 표시됩니다.")
 
