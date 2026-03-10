@@ -240,6 +240,8 @@ def show_login():
     if submitted:
         with st.spinner("인증 중..."):
             init_users_sheet()
+            raw = get_sheet_data("users")
+            gas_test = gas_post({"action": "get_sheet", "sheet_name": "users"})
             user = authenticate(username, password)
         if user:
             st.session_state["user"] = user
@@ -248,6 +250,8 @@ def show_login():
             st.rerun()
         else:
             st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+            st.warning(f"[디버그] Apps Script 응답: {gas_test}")
+            st.warning(f"[디버그] 시트 데이터: {raw}")
 
 # ─────────────────────────────────────────
 # [관리자 페이지]
@@ -507,4 +511,5 @@ elif st.session_state.get("page") == "admin":
     show_admin()
 else:
     show_main()
+
 
