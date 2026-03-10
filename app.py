@@ -337,57 +337,72 @@ def show_main_page():
 
     st.title("📋 대형환경(주) 통합 견적 시스템")
 
+    if "waste_items" not in st.session_state:
+        st.session_state["waste_items"] = []
+    if "recycled_items" not in st.session_state:
+        st.session_state["recycled_items"] = []
+
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
         st.subheader("🔧 견적 데이터 입력")
-        client = st.text_input("수신처", placeholder="입력하세요 (예: OO설계사무소)")
-        project = st.text_input("공사명", placeholder="입력하세요 (예: 세종시 OO공사)")
-        default_valid = (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일")
-        valid_date = st.text_input("유효기간", value=default_valid)
+
+        # 기본 정보 - form으로 묶어서 rerun 최소화
+        with st.form("basic_info_form", clear_on_submit=False):
+            client = st.text_input("수신처", value=st.session_state.get("client",""), placeholder="입력하세요 (예: OO설계사무소)")
+            project = st.text_input("공사명", value=st.session_state.get("project",""), placeholder="입력하세요 (예: 세종시 OO공사)")
+            default_valid = st.session_state.get("valid_date", (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
+            valid_date = st.text_input("유효기간", value=default_valid)
+            info_submitted = st.form_submit_button("✔ 기본정보 저장", use_container_width=True)
+            if info_submitted:
+                st.session_state["client"] = client
+                st.session_state["project"] = project
+                st.session_state["valid_date"] = valid_date
+
+        # 실제 표시용 값
+        client = st.session_state.get("client", "")
+        project = st.session_state.get("project", "")
+        valid_date = st.session_state.get("valid_date", (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
 
         tab_waste, tab_recycled = st.tabs(["♻️ 폐기물 처리", "🪨 순환골재 납품"])
 
-        if "waste_items" not in st.session_state:
-            st.session_state["waste_items"] = []
-        if "recycled_items" not in st.session_state:
-            st.session_state["recycled_items"] = []
-
         with tab_waste:
-            waste_type = st.selectbox("폐기물 성상", list(WASTE_DATA.keys()))
-            qty = st.number_input("수량(ton)", min_value=0.01, value=1.0, step=0.1, format="%.2f")
-            dist_mode = st.selectbox("운반거리", ["30km","35km","40km","50km","60km","60km 초과"])
-            extra_dist = 0
-            if dist_mode == "60km 초과":
-                extra_dist = st.number_input("실제거리(km)", min_value=61, value=70)
-            holiday = st.checkbox("휴일/야간 할증(15%)")
-            if st.button("➕ 폐기물 항목 추가"):
-                base = WASTE_DATA[waste_type]
-                transport = calculate_transport(dist_mode, extra_dist)
-                unit_price = base + transport
-                if holiday:
-                    unit_price = int(unit_price * 1.15)
-                amount = int(unit_price * qty)
-                dist_label = dist_mode if dist_mode != "60km 초과" else f"L={extra_dist}km"
-                st.session_state["waste_items"].append({
-                    "품명": waste_type, "규격": dist_label, "수량": qty,
-                    "단위": "ton", "단가": unit_price, "금액": amount
-                })
-                st.rerun()
+            with st.form("waste_form", clear_on_submit=False):
+                waste_type = st.selectbox("폐기물 성상", list(WASTE_DATA.keys()))
+                qty = st.number_input("수량(ton)", min_value=0.01, value=1.0, step=0.1, format="%.2f")
+                dist_mode = st.selectbox("운반거리", ["30km","35km","40km","50km","60km","60km 초과"])
+                extra_dist = st.number_input("실제거리(km, 60km 초과시)", min_value=61, value=70)
+                holiday = st.checkbox("휴일/야간 할증(15%)")
+                waste_add = st.form_submit_button("➕ 폐기물 항목 추가", use_container_width=True)
+                if waste_add:
+                    base = WASTE_DATA[waste_type]
+                    transport = calculate_transport(dist_mode, extra_dist)
+                    unit_price = base + transport
+                    if holiday:
+                        unit_price = int(unit_price * 1.15)
+                    amount = int(unit_price * qty)
+                    dist_label = dist_mode if dist_mode != "60km 초과" else f"L={extra_dist}km"
+                    st.session_state["waste_items"].append({
+                        "품명": waste_type, "규격": dist_label, "수량": qty,
+                        "단위": "ton", "단가": unit_price, "금액": amount
+                    })
+                    st.rerun()
 
         with tab_recycled:
-            recycled_name = st.text_input("품명", placeholder="예: 순환골재(40mm이하)")
-            recycled_spec = st.text_input("규격", placeholder="예: KS F 2574")
-            recycled_qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f", key="r_qty")
-            recycled_unit = st.selectbox("단위", ["ton","m³","㎥","개"])
-            recycled_price = st.number_input("단가(원)", min_value=0, value=10000, step=100, key="r_price")
-            if st.button("➕ 순환골재 항목 추가"):
-                amount = int(recycled_price * recycled_qty)
-                st.session_state["recycled_items"].append({
-                    "품명": recycled_name, "규격": recycled_spec, "수량": recycled_qty,
-                    "단위": recycled_unit, "단가": recycled_price, "금액": amount
-                })
-                st.rerun()
+            with st.form("recycled_form", clear_on_submit=True):
+                recycled_name = st.text_input("품명", placeholder="예: 순환골재(40mm이하)")
+                recycled_spec = st.text_input("규격", placeholder="예: KS F 2574")
+                recycled_qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
+                recycled_unit = st.selectbox("단위", ["ton","m³","㎥","개"])
+                recycled_price = st.number_input("단가(원)", min_value=0, value=10000, step=100)
+                recycled_add = st.form_submit_button("➕ 순환골재 항목 추가", use_container_width=True)
+                if recycled_add:
+                    amount = int(recycled_price * recycled_qty)
+                    st.session_state["recycled_items"].append({
+                        "품명": recycled_name, "규격": recycled_spec, "수량": recycled_qty,
+                        "단위": recycled_unit, "단가": recycled_price, "금액": amount
+                    })
+                    st.rerun()
 
     with col_right:
         st.subheader("🔍 견적 미리보기")
@@ -395,48 +410,61 @@ def show_main_page():
 
         for idx, item in enumerate(all_items):
             c1, c2 = st.columns([4, 1])
-            c1.write(f"{idx+1}. {item['품명']} ({item['규격']}) : {item['수량']:.2f} {item['단위']} × {item['단가']:,.0f}원 = **{item['금액']:,.0f}원**")
+            c1.write(f"{idx+1}. **{item['품명']}** ({item['규격']}) : {item['수량']:.2f} {item['단위']} × {item['단가']:,.0f}원 = **{item['금액']:,.0f}원**")
             if c2.button("삭제", key=f"del_item_{idx}"):
-                if idx < len(st.session_state["waste_items"]):
+                wi = len(st.session_state["waste_items"])
+                if idx < wi:
                     st.session_state["waste_items"].pop(idx)
                 else:
-                    st.session_state["recycled_items"].pop(idx - len(st.session_state["waste_items"]))
+                    st.session_state["recycled_items"].pop(idx - wi)
                 st.rerun()
 
         total = sum(i["금액"] for i in all_items)
 
         remark_default = "1. 부가세 별도.\n2. 상차비 별도.\n3. 25.5톤 덤프 용적 17㎥ 적용."
-        remark = st.text_area("비고", value=remark_default, height=80)
+        remark = st.text_area("비고", value=st.session_state.get("remark", remark_default), height=80, key="remark_input")
+        if remark != st.session_state.get("remark", remark_default):
+            st.session_state["remark"] = remark
 
         st.divider()
-        if all_items:
-            st.markdown(f"""
-<div style="border:2px solid #ccc; padding:20px; border-radius:5px; background:#1a1a2e;">
-<h3 style="text-align:center;">견 적 서</h3>
-<p><b>수신:</b> {client if client else "(미입력)"} 귀중</p>
-<p><b>합계금액:</b> 일금 {num_to_kor(total)}</p>
-<table style="width:100%; border-collapse:collapse;">
-<tr style="border-bottom:1px solid #ccc;"><th>품명</th><th>규격</th><th>수량</th><th>단위</th><th>단가</th><th>금액</th></tr>
-""" + "".join([f"<tr><td>{i['품명']}</td><td>{i['규격']}</td><td>{i['수량']:,.2f}</td><td>{i['단위']}</td><td>{i['단가']:,.0f}</td><td>{i['금액']:,.0f}</td></tr>" for i in all_items]) + f"""
-</table>
-<div style="margin-top:10px; padding:10px; background:#16213e; border-radius:3px;">
-{"<br>".join([f"{j+1}. {line}" for j, line in enumerate(remark.split(chr(10))) if line.strip()])}
-</div>
-</div>
-""", unsafe_allow_html=True)
-        else:
-            st.info("항목을 추가하면 견적서 미리보기가 표시됩니다.")
 
         if all_items:
-            if st.button("📄 정식 PDF 다운로드"):
-                pdf_buf = generate_pdf(client, project, all_items, remark, valid_date, total, user["name"])
+            rows_html = "".join([
+                f"<tr><td style='padding:4px 8px'>{i['품명']}</td><td style='padding:4px 8px'>{i['규격']}</td>"
+                f"<td style='padding:4px 8px;text-align:right'>{i['수량']:,.2f}</td><td style='padding:4px 8px'>{i['단위']}</td>"
+                f"<td style='padding:4px 8px;text-align:right'>{i['단가']:,.0f}</td>"
+                f"<td style='padding:4px 8px;text-align:right'>{i['금액']:,.0f}</td></tr>"
+                for i in all_items
+            ])
+            st.markdown(f"""
+<div style="border:1px solid #444;padding:16px;border-radius:6px;background:#1a1a2e;font-size:13px;">
+<h4 style="text-align:center;margin-top:0">견 적 서</h4>
+<p><b>수신:</b> {client if client else "(미입력)"} 귀중 &nbsp;&nbsp; <b>공사명:</b> {project if project else "(미입력)"}</p>
+<p><b>합계금액:</b> 일금 {num_to_kor(total)} <span style="color:#aaa">(₩{total:,.0f} / VAT별도)</span></p>
+<table style="width:100%;border-collapse:collapse;border:1px solid #555;">
+<thead><tr style="background:#2a2a4a;border-bottom:1px solid #555;">
+<th style="padding:4px 8px">품명</th><th style="padding:4px 8px">규격</th>
+<th style="padding:4px 8px">수량</th><th style="padding:4px 8px">단위</th>
+<th style="padding:4px 8px">단가</th><th style="padding:4px 8px">금액</th></tr></thead>
+<tbody>{rows_html}</tbody></table>
+</div>
+""", unsafe_allow_html=True)
+
+            # PDF 미리 생성해서 바로 다운로드 버튼 제공 (클릭 1번으로 바로 저장)
+            pdf_buf = generate_pdf(client, project, all_items, remark, valid_date, total, user["name"])
+            fname = f"견적서_{client}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+            if st.download_button(
+                label="📄 정식 PDF 다운로드",
+                data=pdf_buf,
+                file_name=fname,
+                mime="application/pdf",
+                use_container_width=True
+            ):
                 append_log(user, client, project, valid_date, all_items, total)
-                st.download_button(
-                    label="💾 PDF 저장",
-                    data=pdf_buf,
-                    file_name=f"견적서_{client}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf"
-                )
+
+        else:
+            st.info("항목을 추가하면 견적서 미리보기가 표시됩니다.")
 
 # ─── 메인 진입점 ───
 def main():
