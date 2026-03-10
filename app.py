@@ -60,7 +60,9 @@ def load_users() -> pd.DataFrame:
 
 def init_users_sheet():
     data = get_sheet_data(USER_SHEET)
-    if not data:
+    # [['']] 처럼 빈 셀만 있는 경우도 비어있는 것으로 처리
+    is_empty = (not data) or data == [['']] or (len(data) > 0 and data[0] == [''])
+    if is_empty:
         append_row(USER_SHEET, USER_HEADER)
         admin_pw = st.secrets.get("admin_init_password", "admin1234")
         append_row(USER_SHEET, ["admin", hash_pw(admin_pw), "관리자", "admin", "True"])
@@ -511,5 +513,6 @@ elif st.session_state.get("page") == "admin":
     show_admin()
 else:
     show_main()
+
 
 
