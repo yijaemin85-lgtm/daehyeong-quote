@@ -172,7 +172,7 @@ def generate_pdf(client, project, items, remark, valid_date, total_sum, author_n
         pdfmetrics.registerFont(TTFont("NanumFont", p))
         font = "NanumFont"
     c.setFont(font, 25)
-    c.drawCentredString(300, 800, "곬 적 서")
+    c.drawCentredString(300, 800, "견 적 서")
     c.setFont(font, 10)
     c.drawString(50, 750, f"일자: {datetime.now().strftime('%Y-%m-%d')}")
     c.drawString(50, 735, f"유효기간: {valid_date}까지")
@@ -211,3 +211,244 @@ def generate_pdf(client, project, items, remark, valid_date, total_sum, author_n
     c.save()
     buffer.seek(0)
     return buffer
+
+# ─── 로그인 페이지 ───
+def show_login_page():
+    st.title("🔐 대형환경(주) 통합 견적 시스템")
+    st.subheader("로그인")
+    with st.form("login_form"):
+        username = st.text_input("아이디")
+        password = st.text_input("비밀번호", type="password")
+        submitted = st.form_submit_button("로그인")
+        if submitted:
+            if not username or not password:
+                st.error("아이디와 비밀번호를 입력하세요.")
+            else:
+                user = authenticate(username, password)
+                if user:
+                    st.session_state["user"] = user
+                    st.rerun()
+                else:
+                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+
+# ─── 관리자 페이지 ───
+def show_admin_page():
+    st.title("⚙️ 관리자 페이지")
+    if st.button("← 메인으로 돌아가기"):
+        st.session_state["page"] = "main"
+        st.rerun()
+
+    tab1, tab2 = st.tabs(["👥 사원 관리", "📋 견적 이력"])
+
+    with tab1:
+        st.subheader("사원 목록")
+        df = load_users(use_cache=False)
+        if df.empty:
+            st.info("등록된 사원이 없습니다.")
+        else:
+            for _, row in df.iterrows():
+                role_label = "관리자" if row["role"] == "admin" else "일반"
+                col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+                col1.write(f"**{row['name']}** ({row['username']})")
+                col2.write(role_label)
+                col3.write("활성" if str(row["active"]) == "True" else "비활성")
+                if row["username"] != "admin":
+                    if col4.button("탈퇴", key=f"del_{row['username']}"):
+                        st.session_state[f"confirm_del_{row['username']}"] = True
+                    if st.session_state.get(f"confirm_del_{row['username']}"):
+                        st.warning(f"정말 **{row['name']} ({row['username']})**을 삭제하시겠습니까?")
+                        c1, c2 = st.columns(2)
+                        if c1.button("✅ 확인 삭제", key=f"confirm_yes_{row['username']}"):
+                            delete_user(row["username"])
+                            st.session_state.pop(f"confirm_del_{row['username']}", None)
+                            st.success(f"{row['name']} 계정이 삭제되었습니다.")
+                            st.rerun()
+                        if c2.button("❌ 취소", key=f"confirm_no_{row['username']}"):
+                            st.session_state.pop(f"confirm_del_{row['username']}", None)
+                            st.rerun()
+
+        st.divider()
+        st.subheader("신규 사원 추가")
+        with st.form("add_user_form"):
+            new_username = st.text_input("아이디")
+            new_name = st.text_input("이름")
+            new_password = st.text_input("비밀번호", type="password")
+            new_role = st.selectbox("권한", ["employee", "admin"], format_func=lambda x: "일반" if x == "employee" else "관리자")
+            add_submitted = st.form_submit_button("추가")
+            if add_submitted:
+                if not new_username or not new_name or not new_password:
+                    st.error("모든 항목을 입력하세요.")
+                else:
+                    existing = load_users(use_cache=False)
+                    if not existing.empty and new_username in existing["username"].values:
+                        st.error("이미 존재하는 아이디입니다.")
+                    else:
+                        save_user(new_username, hash_pw(new_password), new_name, new_role)
+                        st.success(f"{new_name} ({new_username}) 계정이 추가되었습니다.")
+                        st.rerun()
+
+    with tab2:
+        st.subheader("견적 이력")
+        logs = load_logs()
+        if logs.empty:
+            st.info("견적 이력이 없습니다.")
+        else:
+            for _, log in logs.iterrows():
+                with st.expander(f"[{log.get('timestamp','')}] {log.get('user_name','')} - {log.get('client','')} / {log.get('project','')} (₩{int(float(log.get('total_amount',0))):,})"):
+                    st.write(f"**견적 ID:** {log.get('log_id','')}")
+                    st.write(f"**작성자:** {log.get('user_name','')} ({log.get('username','')})")
+                    st.write(f"**수신처:** {log.get('client','')}")
+                    st.write(f"**공사명:** {log.get('project','')}")
+                    st.write(f"**유효기간:** {log.get('valid_date','')}")
+                    st.write(f"**합계금액:** ₩{int(float(log.get('total_amount',0))):,}")
+                    st.write(f"**계약여부:** {log.get('contract_done','미계약')}")
+                    if log.get("contract_amount"):
+                        st.write(f"**계약금액:** ₩{int(float(log.get('contract_amount',0))):,}")
+                    contract_status = st.selectbox(
+                        "계약 상태 업데이트",
+                        ["미계약", "계약완료", "무산"],
+                        index=["미계약","계약완료","무산"].index(log.get("contract_done","미계약")) if log.get("contract_done","미계약") in ["미계약","계약완료","무산"] else 0,
+                        key=f"status_{log.get('log_id','')}"
+                    )
+                    contract_amount = st.text_input("실계약 금액", value=str(log.get("contract_amount","")), key=f"amount_{log.get('log_id','')}")
+                    memo = st.text_input("메모", value=str(log.get("memo","")), key=f"memo_{log.get('log_id','')}")
+                    if st.button("저장", key=f"save_{log.get('log_id','')}"):
+                        update_log_field(log["log_id"], "contract_done", contract_status)
+                        update_log_field(log["log_id"], "contract_amount", contract_amount)
+                        update_log_field(log["log_id"], "memo", memo)
+                        st.success("저장되었습니다.")
+                        st.rerun()
+
+# ─── 메인 앱 페이지 ───
+def show_main_page():
+    user = st.session_state["user"]
+    role_label = "관리자" if user["role"] == "admin" else "일반"
+
+    with st.sidebar:
+        st.markdown(f"### {'🟢' if user['role']=='admin' else '🔵'} {user['name']} 님")
+        st.caption(f"권한: {role_label}")
+        if user["role"] == "admin":
+            if st.button("⚙️ 관리자 페이지"):
+                st.session_state["page"] = "admin"
+                st.rerun()
+        if st.button("🔴 로그아웃"):
+            st.session_state.clear()
+            st.rerun()
+
+    st.title("📋 대형환경(주) 통합 견적 시스템")
+
+    col_left, col_right = st.columns([1, 1])
+
+    with col_left:
+        st.subheader("🔧 견적 데이터 입력")
+        client = st.text_input("수신처", placeholder="입력하세요 (예: OO설계사무소)")
+        project = st.text_input("공사명", placeholder="입력하세요 (예: 세종시 OO공사)")
+        default_valid = (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일")
+        valid_date = st.text_input("유효기간", value=default_valid)
+
+        tab_waste, tab_recycled = st.tabs(["♻️ 폐기물 처리", "🪨 순환골재 납품"])
+
+        if "waste_items" not in st.session_state:
+            st.session_state["waste_items"] = []
+        if "recycled_items" not in st.session_state:
+            st.session_state["recycled_items"] = []
+
+        with tab_waste:
+            waste_type = st.selectbox("폐기물 성상", list(WASTE_DATA.keys()))
+            qty = st.number_input("수량(ton)", min_value=0.01, value=1.0, step=0.1, format="%.2f")
+            dist_mode = st.selectbox("운반거리", ["30km","35km","40km","50km","60km","60km 초과"])
+            extra_dist = 0
+            if dist_mode == "60km 초과":
+                extra_dist = st.number_input("실제거리(km)", min_value=61, value=70)
+            holiday = st.checkbox("휴일/야간 할증(15%)")
+            if st.button("➕ 폐기물 항목 추가"):
+                base = WASTE_DATA[waste_type]
+                transport = calculate_transport(dist_mode, extra_dist)
+                unit_price = base + transport
+                if holiday:
+                    unit_price = int(unit_price * 1.15)
+                amount = int(unit_price * qty)
+                dist_label = dist_mode if dist_mode != "60km 초과" else f"L={extra_dist}km"
+                st.session_state["waste_items"].append({
+                    "품명": waste_type, "규격": dist_label, "수량": qty,
+                    "단위": "ton", "단가": unit_price, "금액": amount
+                })
+                st.rerun()
+
+        with tab_recycled:
+            recycled_name = st.text_input("품명", placeholder="예: 순환골재(40mm이하)")
+            recycled_spec = st.text_input("규격", placeholder="예: KS F 2574")
+            recycled_qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f", key="r_qty")
+            recycled_unit = st.selectbox("단위", ["ton","m³","㎥","개"])
+            recycled_price = st.number_input("단가(원)", min_value=0, value=10000, step=100, key="r_price")
+            if st.button("➕ 순환골재 항목 추가"):
+                amount = int(recycled_price * recycled_qty)
+                st.session_state["recycled_items"].append({
+                    "품명": recycled_name, "규격": recycled_spec, "수량": recycled_qty,
+                    "단위": recycled_unit, "단가": recycled_price, "금액": amount
+                })
+                st.rerun()
+
+    with col_right:
+        st.subheader("🔍 견적 미리보기")
+        all_items = st.session_state["waste_items"] + st.session_state["recycled_items"]
+
+        for idx, item in enumerate(all_items):
+            c1, c2 = st.columns([4, 1])
+            c1.write(f"{idx+1}. {item['품명']} ({item['규격']}) : {item['수량']:.2f} {item['단위']} × {item['단가']:,.0f}원 = **{item['금액']:,.0f}원**")
+            if c2.button("삭제", key=f"del_item_{idx}"):
+                if idx < len(st.session_state["waste_items"]):
+                    st.session_state["waste_items"].pop(idx)
+                else:
+                    st.session_state["recycled_items"].pop(idx - len(st.session_state["waste_items"]))
+                st.rerun()
+
+        total = sum(i["금액"] for i in all_items)
+
+        remark_default = "1. 부가세 별도.\n2. 상차비 별도.\n3. 25.5톤 덤프 용적 17㎥ 적용."
+        remark = st.text_area("비고", value=remark_default, height=80)
+
+        st.divider()
+        if all_items:
+            st.markdown(f"""
+<div style="border:2px solid #ccc; padding:20px; border-radius:5px; background:#1a1a2e;">
+<h3 style="text-align:center;">견 적 서</h3>
+<p><b>수신:</b> {client if client else "(미입력)"} 귀중</p>
+<p><b>합계금액:</b> 일금 {num_to_kor(total)}</p>
+<table style="width:100%; border-collapse:collapse;">
+<tr style="border-bottom:1px solid #ccc;"><th>품명</th><th>규격</th><th>수량</th><th>단위</th><th>단가</th><th>금액</th></tr>
+""" + "".join([f"<tr><td>{i['품명']}</td><td>{i['규격']}</td><td>{i['수량']:,.2f}</td><td>{i['단위']}</td><td>{i['단가']:,.0f}</td><td>{i['금액']:,.0f}</td></tr>" for i in all_items]) + f"""
+</table>
+<div style="margin-top:10px; padding:10px; background:#16213e; border-radius:3px;">
+{"<br>".join([f"{j+1}. {line}" for j, line in enumerate(remark.split(chr(10))) if line.strip()])}
+</div>
+</div>
+""", unsafe_allow_html=True)
+        else:
+            st.info("항목을 추가하면 견적서 미리보기가 표시됩니다.")
+
+        if all_items:
+            if st.button("📄 정식 PDF 다운로드"):
+                pdf_buf = generate_pdf(client, project, all_items, remark, valid_date, total, user["name"])
+                append_log(user, client, project, valid_date, all_items, total)
+                st.download_button(
+                    label="💾 PDF 저장",
+                    data=pdf_buf,
+                    file_name=f"견적서_{client}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf"
+                )
+
+# ─── 메인 진입점 ───
+def main():
+    init_users_sheet()
+    if "user" not in st.session_state:
+        show_login_page()
+        return
+    if st.session_state.get("page") == "admin" and st.session_state["user"]["role"] == "admin":
+        show_admin_page()
+    else:
+        st.session_state["page"] = "main"
+        show_main_page()
+
+if __name__ == "__main__":
+    main()
