@@ -150,7 +150,6 @@ def load_price_settings_cached():
     return get_sheet_data(PRICE_SHEET)
 
 def load_price_settings():
-    load_price_settings_cached.clear()
     data = load_price_settings_cached()
     if len(data) < 2:
         return {}
@@ -195,33 +194,27 @@ def get_waste_data():
     settings = load_price_settings()
     result = {}
     for k, default in DEFAULT_WASTE_DATA.items():
-        key = f"waste_{k}"
-        result[k] = int(settings.get(key, default))
+        result[k] = int(settings.get(f"waste_{k}", default))
     return result
 
 def get_transport_table():
     settings = load_price_settings()
     result = {}
     for k, default in DEFAULT_TRANSPORT_TABLE.items():
-        key = f"transport_{k}"
-        result[k] = int(settings.get(key, default))
+        result[k] = int(settings.get(f"transport_{k}", default))
     return result
 
 def get_recycled_gov_price():
-    settings = load_price_settings()
-    return int(settings.get("recycled_gov_price", DEFAULT_RECYCLED_GOV_PRICE))
+    return int(load_price_settings().get("recycled_gov_price", DEFAULT_RECYCLED_GOV_PRICE))
 
 def get_recycled_private_price():
-    settings = load_price_settings()
-    return int(settings.get("recycled_private_price", DEFAULT_RECYCLED_PRIVATE_PRICE))
+    return int(load_price_settings().get("recycled_private_price", DEFAULT_RECYCLED_PRIVATE_PRICE))
 
 def get_dump_volume():
-    settings = load_price_settings()
-    return float(settings.get("dump_volume", DEFAULT_DUMP_VOLUME))
+    return float(load_price_settings().get("dump_volume", DEFAULT_DUMP_VOLUME))
 
 def get_extra_km_rate():
-    settings = load_price_settings()
-    return int(settings.get("extra_km_rate", DEFAULT_EXTRA_KM_RATE))
+    return int(load_price_settings().get("extra_km_rate", DEFAULT_EXTRA_KM_RATE))
 
 def calculate_transport(mode, m_dist=0):
     transport_table = get_transport_table()
@@ -237,258 +230,286 @@ def num_to_kor(num):
     nums = ["","일","이","삼","사","오","육","칠","팔","구"]
     n = int(num)
     result = ""
-    digits = str(n)
-    for i, d in enumerate(reversed(digits)):
+    for i, d in enumerate(reversed(str(n))):
         if d != "0":
             result = nums[int(d)] + units[i] + result
     return result + "원정"
 
 
-def generate_pdf(client, project, items, remark, valid_date, total_sum, author_name, author_phone="", show_author=False):
+def generate_pdf(client, project, items, remark, valid_date, total_sum,
+                 author_name="", author_phone="", show_author=False):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    W, H = A4  # 595, 842
+    W, H = A4  # 595.27 x 841.89 pt
 
-    # 폰트 등록
-    font_r = "Helvetica"
-    font_b = "Helvetica-Bold"
+    # ── 폰트 등록 ──
+    fn_r, fn_b = "Helvetica", "Helvetica-Bold"
     if os.path.exists("NanumSquareR.ttf"):
-        pdfmetrics.registerFont(TTFont("NanumR", "NanumSquareR.ttf"))
-        font_r = "NanumR"
+        pdfmetrics.registerFont(TTFont("NR", "NanumSquareR.ttf"))
+        fn_r = "NR"
     if os.path.exists("NanumSquareB.ttf"):
-        pdfmetrics.registerFont(TTFont("NanumB", "NanumSquareB.ttf"))
-        font_b = "NanumB"
+        pdfmetrics.registerFont(TTFont("NB", "NanumSquareB.ttf"))
+        fn_b = "NB"
     if os.path.exists("NanumSquareEB.ttf"):
-        pdfmetrics.registerFont(TTFont("NanumEB", "NanumSquareEB.ttf"))
+        pdfmetrics.registerFont(TTFont("NEB", "NanumSquareEB.ttf"))
     if os.path.exists("NanumSquareL.ttf"):
-        pdfmetrics.registerFont(TTFont("NanumL", "NanumSquareL.ttf"))
+        pdfmetrics.registerFont(TTFont("NL", "NanumSquareL.ttf"))
 
-    margin_l = 30 * mm
-    margin_r = W - 30 * mm
-    page_w = margin_r - margin_l
+    # ── 여백 ──
+    ML = 25 * mm   # left margin  (25mm)
+    MR = W - 20 * mm  # right margin (20mm from right edge)
+    PW = MR - ML      # usable width ~150mm = 425pt
 
-    # ── 제목 ──
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 22)
-    c.drawCentredString(W / 2, H - 25 * mm, "견     적     서")
-    c.setLineWidth(1.5)
-    c.line(margin_l, H - 28 * mm, margin_r, H - 28 * mm)
+    # ══════════════════════════════
+    # 1. 제목
+    # ══════════════════════════════
+    c.setFont(fn_b, 20)
+    c.drawCentredString(W / 2, H - 20 * mm, "견     적     서")
+    c.setLineWidth(1.2)
+    c.line(ML, H - 23 * mm, MR, H - 23 * mm)
 
-    # ── 좌측: 날짜 / 수신처 / 공사명 ──
-    left_x = margin_l
-    right_col_x = margin_l + page_w * 0.52
-    info_box_w = page_w * 0.46
+    # ══════════════════════════════
+    # 2. 좌측 정보 / 우측 회사정보 테이블
+    # ══════════════════════════════
+    LEFT_W = PW * 0.50   # 좌측 너비
+    RIGHT_W = PW * 0.48  # 우측 너비
+    right_x = ML + LEFT_W + PW * 0.02  # 우측 시작 x
 
-    # 날짜 파싱
-    now = datetime.now()
-    date_str = f"서기  {now.year} 년  {now.month} 월  {now.day} 일"
-    c.setFont(font_r, 10)
-    c.drawString(left_x, H - 34 * mm, date_str)
-    # 날짜 밑줄
-    date_w = c.stringWidth(date_str, font_r, 10)
-    c.setLineWidth(0.5)
-    c.line(left_x, H - 35 * mm, left_x + date_w, H - 35 * mm)
-
-    # 수신처 박스
-    c.setLineWidth(1.0)
-    c.rect(left_x, H - 46 * mm, page_w * 0.48, 8 * mm)
-    client_text = f"  {client if client else '(수신처)'}  귀중"
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 11)
-    c.drawString(left_x + 3, H - 42 * mm, client_text)
-
-    c.setFont(font_r, 10)
-    c.drawString(left_x, H - 51 * mm, "내역을 하기와 같이 제출합니다.")
-
-    c.drawString(left_x, H - 57 * mm, f"유효견적기간   {valid_date}한")
-
-    proj_lines = []
-    if project:
-        words = project
-        if len(words) > 22:
-            proj_lines = [words[:22], words[22:44], words[44:]]
-            proj_lines = [l for l in proj_lines if l]
-        else:
-            proj_lines = [words]
-    else:
-        proj_lines = ["(공사명)"]
-
-    c.drawString(left_x, H - 63 * mm, "공사명 :  " + proj_lines[0])
-    for idx, line in enumerate(proj_lines[1:], 1):
-        c.drawString(left_x + 18 * mm, H - (63 + idx * 5) * mm, line)
-
-    # ── 우측: 회사 정보 테이블 ──
-    info_x = right_col_x
-    info_y_top = H - 30 * mm
-    info_row_h = 7.5 * mm
+    # ── 우측 회사 정보 테이블 ──
+    info_top_y = H - 26 * mm
+    row_h = 7.2 * mm
     info_rows = [
         ("등  록  번  호", "308-81-09656"),
         ("상          호", "대  형  환  경  (주)"),
         ("성          명", "이  관  형"),
-        ("업          태", "서비스 제조"),
+        ("업          태", None),   # 특별 처리
         ("주          소", "충남 논산시 벌곡면 대둔로 1290-23"),
-        ("전          화", "☎ 041)732-0620  Fax 732-0622"),
+        ("전          화", "041)732-0620  Fax 732-0622"),
     ]
+    n_rows = len(info_rows)
+    label_col_w = 26 * mm
+    value_col_w = RIGHT_W - label_col_w
 
-    c.setLineWidth(0.8)
-    c.rect(info_x, info_y_top - len(info_rows) * info_row_h, info_box_w, len(info_rows) * info_row_h)
+    c.setLineWidth(0.7)
+    c.rect(right_x, info_top_y - n_rows * row_h, RIGHT_W, n_rows * row_h)
     for i, (label, value) in enumerate(info_rows):
-        row_y = info_y_top - (i + 1) * info_row_h
+        ry = info_top_y - (i + 1) * row_h
         if i > 0:
-            c.line(info_x, row_y + info_row_h, info_x + info_box_w, row_y + info_row_h)
-        c.setLineWidth(0.3)
-        c.line(info_x + 28 * mm, row_y, info_x + 28 * mm, row_y + info_row_h)
-        c.setFont(font_r, 8.5)
-        c.drawString(info_x + 2 * mm, row_y + 2 * mm, label)
+            c.setLineWidth(0.4)
+            c.line(right_x, ry + row_h, right_x + RIGHT_W, ry + row_h)
+        c.setLineWidth(0.4)
+        c.line(right_x + label_col_w, ry, right_x + label_col_w, ry + row_h)
+        c.setFont(fn_r, 8)
+        c.drawString(right_x + 1.5 * mm, ry + 2 * mm, label)
+        vx = right_x + label_col_w + 1.5 * mm
         if label == "성          명":
-            c.drawString(info_x + 30 * mm, row_y + 2 * mm, value)
+            c.setFont(fn_b, 9)
+            c.drawString(vx, ry + 2 * mm, value)
             if os.path.exists("stamp.png"):
-                c.drawImage("stamp.png", info_x + info_box_w - 15 * mm, row_y, width=13 * mm, height=13 * mm, mask="auto")
+                c.drawImage("stamp.png", right_x + RIGHT_W - 14 * mm,
+                            ry + 0.5 * mm, width=12 * mm, height=12 * mm, mask="auto")
         elif label == "업          태":
-            c.drawString(info_x + 30 * mm, row_y + 4 * mm, value)
-            c.setFont(font_r, 7)
-            c.drawString(info_x + 46 * mm, row_y + 4 * mm, "종목")
-            c.drawString(info_x + 53 * mm, row_y + 4.5 * mm, "건설 폐기물 수집 및 운반,")
-            c.drawString(info_x + 53 * mm, row_y + 1 * mm, "중간처리,비계철거,순환골재판매")
-        else:
-            c.setFont(font_r, 8.5)
-            c.drawString(info_x + 30 * mm, row_y + 2 * mm, value)
-
-    # ── 합계금액 행 ──
-    total_y = H - 30 * mm - len(info_rows) * info_row_h - 8 * mm
-    c.setLineWidth(1.0)
-    c.rect(margin_l, total_y - 7 * mm, page_w, 7 * mm)
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 10)
-    if total_sum and total_sum > 0:
-        total_kor = num_to_kor(total_sum)
-        total_str = f"합  계  금  액  :    일금  {total_kor}    ( ₩  {total_sum:,.0f}  )"
-    else:
-        total_str = "합  계  금  액  :    본 견적은 단위 단가 견적임    ( ₩  -  )"
-    c.drawString(margin_l + 5 * mm, total_y - 4.5 * mm, total_str)
-
-    # ── 품목 테이블 ──
-    table_y_top = total_y - 7 * mm
-    col_no = margin_l
-    col_name = margin_l + 10 * mm
-    col_spec = margin_l + 55 * mm
-    col_qty = margin_l + 82 * mm
-    col_unit = margin_l + 96 * mm
-    col_trans = margin_l + 110 * mm
-    col_price = margin_l + 130 * mm
-    col_amount = margin_l + 153 * mm
-    col_remark = margin_l + 175 * mm
-    col_end = margin_r
-
-    row_h = 7 * mm
-    header_h = 12 * mm
-
-    # 헤더
-    c.setLineWidth(0.8)
-    c.rect(col_no, table_y_top - header_h, page_w, header_h)
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 8.5)
-
-    headers_info = [
-        (col_no, col_name, "No"),
-        (col_name, col_spec, "품     명"),
-        (col_spec, col_qty, "규     격"),
-        (col_qty, col_unit, "수량"),
-        (col_unit, col_trans, "단위"),
-        (col_trans, col_price, "운반비"),
-        (col_price, col_amount, "처리비/제품비"),
-        (col_amount, col_remark, "금     액"),
-        (col_remark, col_end, "비고"),
-    ]
-    for i, (x_start, x_end, label) in enumerate(headers_info):
-        mid_x = (x_start + x_end) / 2
-        if i == 5 or i == 6:
-            c.setFont(font_r, 7)
-            c.drawCentredString(mid_x, table_y_top - 5 * mm, label)
-        else:
-            c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 8.5)
-            c.drawCentredString(mid_x, table_y_top - 7 * mm, label)
-        if i > 0:
+            c.setFont(fn_r, 7.5)
+            c.drawString(vx, ry + 4 * mm, "서비스 제조")
+            c.setFont(fn_r, 6.5)
+            biz_x = vx + 22 * mm
+            c.drawString(biz_x, ry + 4.5 * mm, "건설폐기물 수집·운반,")
+            c.drawString(biz_x, ry + 1.5 * mm, "중간처리,비계철거,순환골재판매")
+            # 종목 라인
             c.setLineWidth(0.3)
-            c.line(x_start, table_y_top - header_h, x_start, table_y_top)
+            c.line(vx + 20 * mm, ry, vx + 20 * mm, ry + row_h)
+            c.setFont(fn_r, 7)
+            c.drawString(vx + 20.5 * mm, ry + 2 * mm, "종목")
+        elif label == "전          화":
+            c.setFont(fn_r, 8)
+            c.drawString(vx, ry + 2 * mm, "☎ " + value)
+        else:
+            c.setFont(fn_r, 8.5)
+            c.drawString(vx, ry + 2 * mm, value)
 
-    # "단 가" 상단 헤더
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 8.5)
-    c.drawCentredString((col_trans + col_amount) / 2, table_y_top - 3 * mm, "단     가")
+    # ── 좌측: 날짜 / 수신처 / 공사명 ──
+    now = datetime.now()
+    date_str = f"서기  {now.year} 년  {now.month} 월  {now.day} 일"
+    c.setFont(fn_r, 10)
+    c.drawString(ML, info_top_y - 5 * mm, date_str)
+    dw = c.stringWidth(date_str, fn_r, 10)
+    c.setLineWidth(0.5)
+    c.line(ML, info_top_y - 6 * mm, ML + dw, info_top_y - 6 * mm)
+
+    # 수신처 박스
+    box_y = info_top_y - 15 * mm
+    c.setLineWidth(0.8)
+    c.rect(ML, box_y, LEFT_W * 0.9, 8 * mm)
+    c.setFont(fn_b, 11)
+    client_disp = (client if client else "(수신처)") + "  귀중"
+    c.drawString(ML + 2 * mm, box_y + 2 * mm, client_disp)
+
+    c.setFont(fn_r, 9.5)
+    c.drawString(ML, info_top_y - 27 * mm, "내역을 하기와 같이 제출합니다.")
+    c.drawString(ML, info_top_y - 33 * mm, f"유효견적기간   {valid_date}한")
+
+    proj_full = project if project else "(공사명)"
+    proj_label = "공사명 :  "
+    pw_avail = LEFT_W - c.stringWidth(proj_label, fn_r, 9.5)
+    c.drawString(ML, info_top_y - 39 * mm, proj_label + proj_full[:int(pw_avail / 5)])
+    if len(proj_full) > int(pw_avail / 5):
+        c.drawString(ML + c.stringWidth(proj_label, fn_r, 9.5),
+                     info_top_y - 44 * mm, proj_full[int(pw_avail / 5):])
+
+    # ══════════════════════════════
+    # 3. 합계금액 행
+    # ══════════════════════════════
+    sum_bar_top = info_top_y - n_rows * row_h - 3 * mm
+    sum_bar_h = 8 * mm
+    c.setLineWidth(0.8)
+    c.rect(ML, sum_bar_top - sum_bar_h, PW, sum_bar_h)
+    c.setFont(fn_b, 10)
+    if total_sum and total_sum > 0:
+        ts = f"합  계  금  액  :    일금  {num_to_kor(total_sum)}   ( \u20a9  {total_sum:,.0f}  )"
+    else:
+        ts = "합  계  금  액  :    본 견적은 단위 단가 견적임   ( \u20a9  -  )"
+    c.drawString(ML + 3 * mm, sum_bar_top - sum_bar_h + 2.5 * mm, ts)
+
+    # ══════════════════════════════
+    # 4. 품목 테이블
+    # ══════════════════════════════
+    # 컬럼 너비 (mm) : No(8) | 품명(38) | 규격(20) | 수량(12) | 단위(11) | 운반비(20) | 처리/제품비(20) | 금액(21)
+    # 비고는 테이블 내 마지막 컬럼 없이 → 금액 다음에 비고 넣기
+    # 전체 PW = 150mm 정도
+    CN = [8, 38, 20, 12, 11, 20, 20, 21]  # mm단위
+    # 비고 추가
+    # 전체 합: 8+38+20+12+11+20+20+21 = 150mm
+    # 비고는 없이 금액이 마지막. 비고는 테이블 밖에 별도.
+    # → 비고를 테이블 안에 포함: 조정
+    # No(7) | 품명(35) | 규격(18) | 수량(11) | 단위(10) | 운반비(18) | 처리비(18) | 금액(19) | 비고(14) = 150
+    CN = [7, 35, 18, 11, 10, 18, 18, 19, 14]  # 총 150mm
+    col_xs = [ML]
+    for w in CN[:-1]:
+        col_xs.append(col_xs[-1] + w * mm)
+    col_xs.append(MR)  # 마지막 끝
+
+    tbl_top = sum_bar_top - sum_bar_h - 1 * mm
+    hdr_h = 11 * mm
+    row_h_tbl = 6.5 * mm
+    max_rows = 15
+
+    # 헤더 외곽
+    c.setLineWidth(0.7)
+    c.rect(ML, tbl_top - hdr_h, PW, hdr_h)
+
+    # 헤더 세로선
+    for cx in col_xs[1:-1]:
+        c.setLineWidth(0.3)
+        c.line(cx, tbl_top - hdr_h, cx, tbl_top)
+
+    # "단 가" 상단 병합
+    danga_x1 = col_xs[5]
+    danga_x2 = col_xs[7]
+    c.setFont(fn_b, 8.5)
+    c.drawCentredString((danga_x1 + danga_x2) / 2, tbl_top - 4.5 * mm, "단   가")
     c.setLineWidth(0.3)
-    c.line(col_trans, table_y_top - header_h / 2, col_amount, table_y_top - header_h / 2)
+    c.line(danga_x1, tbl_top - hdr_h / 2, danga_x2, tbl_top - hdr_h / 2)
+
+    hdr_labels = ["No", "품     명", "규     격", "수량", "단위", "운반비", "처리비\n/제품비", "금     액", "비고"]
+    for i, (x1, x2, lbl) in enumerate(zip(col_xs, col_xs[1:], hdr_labels)):
+        mid = (x1 + x2) / 2
+        if i in [5, 6]:  # 단가 하위 헤더
+            c.setFont(fn_r, 7)
+            c.drawCentredString(mid, tbl_top - hdr_h + 2 * mm, lbl.replace("\n", " "))
+        elif "\n" in lbl:
+            parts = lbl.split("\n")
+            c.setFont(fn_b if i not in [3,4] else fn_r, 8)
+            c.drawCentredString(mid, tbl_top - 6 * mm, parts[0])
+            c.drawCentredString(mid, tbl_top - 9.5 * mm, parts[1])
+        elif i in [3, 4]:
+            c.setFont(fn_r, 7.5)
+            c.drawCentredString(mid, tbl_top - 6.5 * mm, lbl)
+        else:
+            c.setFont(fn_b, 8.5)
+            c.drawCentredString(mid, tbl_top - 7 * mm, lbl)
 
     # 데이터 행
-    max_data_rows = 15
-    data_rows_y = table_y_top - header_h
-    c.setLineWidth(0.8)
-    c.rect(col_no, data_rows_y - max_data_rows * row_h, page_w, max_data_rows * row_h)
+    data_top = tbl_top - hdr_h
+    c.setLineWidth(0.7)
+    c.rect(ML, data_top - max_rows * row_h_tbl, PW, max_rows * row_h_tbl)
 
-    blank_after = False
-    for row_i, item in enumerate(items[:max_data_rows]):
-        row_y = data_rows_y - (row_i + 1) * row_h
-        c.setLineWidth(0.3)
-        c.line(col_no, row_y + row_h, col_end, row_y + row_h)
-        for x_start, x_end, _ in headers_info[1:]:
-            c.line(x_start, row_y, x_start, row_y + row_h)
+    used_rows = len(items[:max_rows])
+    for ri, item in enumerate(items[:max_rows]):
+        ry = data_top - (ri + 1) * row_h_tbl
+        c.setLineWidth(0.25)
+        c.line(ML, ry + row_h_tbl, MR, ry + row_h_tbl)
+        for cx in col_xs[1:-1]:
+            c.line(cx, ry, cx, ry + row_h_tbl)
 
-        c.setFont(font_r, 9)
-        c.drawCentredString((col_no + col_name) / 2, row_y + 2 * mm, str(row_i + 1) + ".")
-        # 품명 (글자 잘림 처리)
-        name_str = str(item.get("품명", ""))
-        c.drawString(col_name + 1 * mm, row_y + 2 * mm, name_str[:12])
-        c.drawString(col_spec + 1 * mm, row_y + 2 * mm, str(item.get("규격", ""))[:8])
-        c.drawCentredString((col_qty + col_unit) / 2, row_y + 2 * mm, f"{item.get('수량', 0):,.2f}")
-        c.drawCentredString((col_unit + col_trans) / 2, row_y + 2 * mm, str(item.get("단위", "")))
+        c.setFont(fn_r, 8.5)
+        def mc(x1, x2, txt, bold=False):
+            c.setFont(fn_b if bold else fn_r, 8.5)
+            c.drawCentredString((x1 + x2) / 2, ry + 1.8 * mm, str(txt))
+        def ml(x1, txt):
+            c.setFont(fn_r, 8.5)
+            c.drawString(x1 + 1 * mm, ry + 1.8 * mm, str(txt))
+        def mr2(x2, txt):
+            c.setFont(fn_r, 8.5)
+            c.drawRightString(x2 - 1 * mm, ry + 1.8 * mm, str(txt))
 
-        trans_val = item.get("운반비", 0)
-        price_val = item.get("처리비", item.get("제품비", item.get("단가", 0)))
-        amount_val = item.get("금액", 0)
-        remark_val = item.get("비고", "")
+        mc(col_xs[0], col_xs[1], f"{ri+1}.")
+        ml(col_xs[1], str(item.get("품명",""))[:13])
+        ml(col_xs[2], str(item.get("규격",""))[:9])
+        mc(col_xs[3], col_xs[4], f"{item.get('수량',0):,.2f}")
+        mc(col_xs[4], col_xs[5], str(item.get("단위","")))
 
-        if trans_val and int(trans_val) > 0:
-            c.drawRightString(col_price - 1 * mm, row_y + 2 * mm, f"{int(trans_val):,}")
+        tv = int(item.get("운반비", 0))
+        pv = int(item.get("제품비", item.get("처리비", item.get("단가", 0))))
+        av = int(item.get("금액", 0))
+        bv = str(item.get("비고", ""))
+
+        if tv > 0:
+            mr2(col_xs[6], f"{tv:,}")
         else:
-            c.drawCentredString((col_trans + col_price) / 2, row_y + 2 * mm, "-")
-        c.drawRightString(col_amount - 1 * mm, row_y + 2 * mm, f"{int(price_val):,}")
-        c.drawRightString(col_remark - 1 * mm, row_y + 2 * mm, f"{int(amount_val):,}")
-        c.drawCentredString((col_remark + col_end) / 2, row_y + 2 * mm, str(remark_val))
+            mc(col_xs[5], col_xs[6], "-")
+        mr2(col_xs[7], f"{pv:,}")
+        mr2(col_xs[8], f"{av:,}")
+        mc(col_xs[8], col_xs[9], bv)
 
     # 이하여백
-    next_row = len(items)
-    if next_row < max_data_rows:
-        blank_row_y = data_rows_y - (next_row + 1) * row_h
-        c.setFont(font_r, 9)
-        c.drawCentredString(W / 2, blank_row_y + 2 * mm, "—  이  하  여  백  —")
-        for extra_i in range(next_row + 1, max_data_rows):
-            row_y = data_rows_y - (extra_i + 1) * row_h
+    if used_rows < max_rows:
+        blank_ry = data_top - (used_rows + 1) * row_h_tbl
+        c.setFont(fn_r, 9)
+        c.drawCentredString(W / 2, blank_ry + 1.8 * mm, "—  이  하  여  백  —")
+        for extra in range(used_rows + 1, max_rows):
+            ery = data_top - (extra + 1) * row_h_tbl
             c.setLineWidth(0.2)
-            c.line(col_no, row_y + row_h, col_end, row_y + row_h)
+            c.line(ML, ery + row_h_tbl, MR, ery + row_h_tbl)
 
     # 합계 행
-    sum_row_y = data_rows_y - max_data_rows * row_h
-    c.setLineWidth(0.8)
-    c.rect(col_no, sum_row_y - row_h, page_w, row_h)
-    for x_start, x_end, _ in headers_info[1:]:
-        c.setLineWidth(0.3)
-        c.line(x_start, sum_row_y - row_h, x_start, sum_row_y)
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 9)
-    c.drawCentredString(col_name + (col_spec - col_name) * 0.3, sum_row_y - row_h + 2 * mm, "[  합      계  ]")
+    sum_ry = data_top - max_rows * row_h_tbl
+    c.setLineWidth(0.7)
+    c.rect(ML, sum_ry - row_h_tbl, PW, row_h_tbl)
+    for cx in col_xs[1:-1]:
+        c.setLineWidth(0.25)
+        c.line(cx, sum_ry - row_h_tbl, cx, sum_ry)
+    c.setFont(fn_b, 9)
+    c.drawCentredString((col_xs[1] + col_xs[3]) / 2, sum_ry - row_h_tbl + 2 * mm, "[  합      계  ]")
     if total_sum and total_sum > 0:
-        c.drawRightString(col_remark - 1 * mm, sum_row_y - row_h + 2 * mm, f"{int(total_sum):,}")
+        c.drawRightString(col_xs[8] - 1 * mm, sum_ry - row_h_tbl + 2 * mm, f"{int(total_sum):,}")
 
-    # 비고
-    remark_y = sum_row_y - row_h - 5 * mm
-    c.setFont(font_b if font_b != "Helvetica-Bold" else font_r, 9)
-    c.drawString(margin_l, remark_y, "§ 備 考 §")
-    c.setFont(font_r, 9)
+    # ══════════════════════════════
+    # 5. 비고 섹션
+    # ══════════════════════════════
+    remark_y = sum_ry - row_h_tbl - 6 * mm
+    c.setFont(fn_b, 9)
+    c.drawString(ML, remark_y, "§ 비 고 §")
+    c.setFont(fn_r, 9)
     for i, line in enumerate(remark.split("\n")):
-        c.drawString(margin_l, remark_y - (i + 1) * 5 * mm, line)
+        c.drawString(ML, remark_y - (i + 1) * 5 * mm, line)
 
     # 담당자
     if show_author and author_name:
-        bottom_y = 15 * mm
-        c.setFont(font_r, 9)
-        contact_str = f"담당자 : {author_name}"
+        contact = f"담당자 : {author_name}"
         if author_phone:
-            contact_str += f"  (Tel : {author_phone})"
-        c.drawRightString(margin_r, bottom_y, contact_str)
+            contact += f"  (Tel : {author_phone})"
+        c.setFont(fn_r, 9)
+        c.drawRightString(MR, 15 * mm, contact)
 
     c.showPage()
     c.save()
@@ -533,11 +554,12 @@ def show_admin_page():
             for _, row in df.iterrows():
                 role_label = "관리자" if row["role"] == "admin" else "일반"
                 col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
-                col1.write(f"**{row['name']}** ({row['username']})" + (f" | {row.get('phone','')}" if row.get('phone') else ""))
+                phone_str = f" | {row.get('phone','')}" if row.get('phone') else ""
+                col1.write(f"**{row['name']}** ({row['username']}){phone_str}")
                 col2.write(role_label)
                 col3.write("활성" if str(row["active"]) == "True" else "비활성")
                 if row["username"] != "admin":
-                    uname = row["username"]
+                    uname = str(row["username"])
                     if col4.button("탈퇴", key=f"del_{uname}"):
                         st.session_state[f"confirm_del_{uname}"] = True
                     if st.session_state.get(f"confirm_del_{uname}"):
@@ -558,9 +580,9 @@ def show_admin_page():
             new_name = st.text_input("이름")
             new_phone = st.text_input("휴대전화번호", placeholder="예: 010-1234-5678")
             new_password = st.text_input("비밀번호", type="password")
-            new_role = st.selectbox("권한", ["employee", "admin"], format_func=lambda x: "일반" if x == "employee" else "관리자")
-            add_submitted = st.form_submit_button("추가")
-            if add_submitted:
+            new_role = st.selectbox("권한", ["employee", "admin"],
+                                    format_func=lambda x: "일반" if x == "employee" else "관리자")
+            if st.form_submit_button("추가"):
                 if not new_username or not new_name or not new_password:
                     st.error("아이디, 이름, 비밀번호는 필수 항목입니다.")
                 else:
@@ -580,89 +602,83 @@ def show_admin_page():
         else:
             for log_i, (_, log) in enumerate(logs.iterrows()):
                 lid = log.get("log_id", str(log_i))
-                with st.expander(f"[{log.get('timestamp','')}] {log.get('user_name','')} - {log.get('client','')} / {log.get('project','')} (₩{int(float(log.get('total_amount',0) or 0)):,})"):
+                amt = int(float(log.get("total_amount", 0) or 0))
+                with st.expander(f"[{log.get('timestamp','')}] {log.get('user_name','')} - {log.get('client','')} / {log.get('project','')} (₩{amt:,})"):
                     st.write(f"**견적 ID:** {lid}")
                     st.write(f"**작성자:** {log.get('user_name','')} ({log.get('username','')})")
                     st.write(f"**수신처:** {log.get('client','')}")
                     st.write(f"**공사명:** {log.get('project','')}")
                     st.write(f"**유효기간:** {log.get('valid_date','')}")
-                    st.write(f"**합계금액:** ₩{int(float(log.get('total_amount',0) or 0)):,}")
-                    st.write(f"**계약여부:** {log.get('contract_done','미계약')}")
-                    contract_options = ["미계약","계약완료","무산"]
-                    cur_status = log.get("contract_done","미계약")
-                    if cur_status not in contract_options:
-                        cur_status = "미계약"
-                    contract_status = st.selectbox(
-                        "계약 상태 업데이트",
-                        contract_options,
-                        index=contract_options.index(cur_status),
-                        key=f"status_{lid}_{log_i}"
-                    )
-                    contract_amount = st.text_input("실계약 금액", value=str(log.get("contract_amount","")), key=f"amount_{lid}_{log_i}")
-                    memo = st.text_input("메모", value=str(log.get("memo","")), key=f"memo_{lid}_{log_i}")
+                    st.write(f"**합계금액:** ₩{amt:,}")
+                    options = ["미계약","계약완료","무산"]
+                    cur = log.get("contract_done","미계약")
+                    if cur not in options:
+                        cur = "미계약"
+                    sel = st.selectbox("계약 상태", options, index=options.index(cur),
+                                       key=f"status_{lid}_{log_i}")
+                    ca = st.text_input("실계약 금액", value=str(log.get("contract_amount","")),
+                                       key=f"amount_{lid}_{log_i}")
+                    memo = st.text_input("메모", value=str(log.get("memo","")),
+                                         key=f"memo_{lid}_{log_i}")
                     if st.button("저장", key=f"save_{lid}_{log_i}"):
-                        update_log_field(lid, "contract_done", contract_status)
-                        update_log_field(lid, "contract_amount", contract_amount)
+                        update_log_field(lid, "contract_done", sel)
+                        update_log_field(lid, "contract_amount", ca)
                         update_log_field(lid, "memo", memo)
                         st.success("저장되었습니다.")
-                        st.rerun()
 
     with tab3:
         st.subheader("💰 단가 관리")
-        settings = load_price_settings()
-
         st.markdown("#### 건설폐기물 처리비 단가 (원/ton)")
-        waste_data = get_waste_data()
+        wd = get_waste_data()
         with st.form("waste_price_form"):
-            new_waste = {}
+            nw = {}
             cols = st.columns(2)
-            for i, (wtype, wprice) in enumerate(waste_data.items()):
-                new_waste[wtype] = cols[i % 2].number_input(wtype, min_value=0, value=wprice, step=100, key=f"wp_{wtype}")
+            for i, (k, v) in enumerate(wd.items()):
+                nw[k] = cols[i % 2].number_input(k, min_value=0, value=v, step=100, key=f"wp_{k}")
             if st.form_submit_button("폐기물 단가 저장"):
-                for wtype, wprice in new_waste.items():
-                    save_price_setting(f"waste_{wtype}", wprice)
-                st.success("폐기물 처리비 단가가 저장되었습니다.")
+                for k, v in nw.items():
+                    save_price_setting(f"waste_{k}", v)
+                st.success("저장되었습니다.")
                 st.rerun()
 
         st.markdown("#### 운반비 단가표 (원/ton)")
-        transport_table = get_transport_table()
+        tt = get_transport_table()
         with st.form("transport_price_form"):
-            new_transport = {}
+            nt = {}
             cols2 = st.columns(3)
-            for i, (dist, tprice) in enumerate(transport_table.items()):
-                new_transport[dist] = cols2[i % 3].number_input(dist, min_value=0, value=tprice, step=100, key=f"tp_{dist}")
-            extra_rate = int(settings.get("extra_km_rate", DEFAULT_EXTRA_KM_RATE))
-            new_extra_rate = st.number_input("60km 초과 시 km당 추가 단가 (원/km)", min_value=0, value=extra_rate, step=10)
+            for i, (k, v) in enumerate(tt.items()):
+                nt[k] = cols2[i % 3].number_input(k, min_value=0, value=v, step=100, key=f"tp_{k}")
+            er = get_extra_km_rate()
+            ner = st.number_input("60km 초과 km당 추가 단가(원/km)", min_value=0, value=er, step=10)
             if st.form_submit_button("운반비 단가 저장"):
-                for dist, tprice in new_transport.items():
-                    save_price_setting(f"transport_{dist}", tprice)
-                save_price_setting("extra_km_rate", new_extra_rate)
-                st.success("운반비 단가가 저장되었습니다.")
+                for k, v in nt.items():
+                    save_price_setting(f"transport_{k}", v)
+                save_price_setting("extra_km_rate", ner)
+                st.success("저장되었습니다.")
                 st.rerun()
 
         st.markdown("#### 순환골재 제품비 단가")
         with st.form("recycled_price_form"):
-            gov_price = get_recycled_gov_price()
-            private_price = get_recycled_private_price()
-            dump_vol = get_dump_volume()
-            new_gov = st.number_input("관급/설계 단가 (원/m³)", min_value=0, value=gov_price, step=100)
-            new_private = st.number_input("사급 단가 (원/m³)", min_value=0, value=private_price, step=100)
-            new_dump_vol = st.number_input("25톤 덤프트럭 기준 적재용적 (m³/대)", min_value=1.0, value=dump_vol, step=0.5, format="%.1f")
-            st.info(f"대당 관급 단가: {int(new_gov * new_dump_vol):,}원  |  대당 사급 단가: {int(new_private * new_dump_vol):,}원")
+            gp = get_recycled_gov_price()
+            pp = get_recycled_private_price()
+            dv = get_dump_volume()
+            ng = st.number_input("관급/설계 단가 (원/m³)", min_value=0, value=gp, step=100)
+            np2 = st.number_input("사급 단가 (원/m³)", min_value=0, value=pp, step=100)
+            ndv = st.number_input("덤프트럭 적재용적 (m³/대)", min_value=1.0, value=dv, step=0.5, format="%.1f")
+            st.info(f"대당 관급: {int(ng*ndv):,}원  |  대당 사급: {int(np2*ndv):,}원")
             if st.form_submit_button("순환골재 단가 저장"):
-                save_price_setting("recycled_gov_price", new_gov)
-                save_price_setting("recycled_private_price", new_private)
-                save_price_setting("dump_volume", new_dump_vol)
-                st.success("순환골재 단가가 저장되었습니다.")
+                save_price_setting("recycled_gov_price", ng)
+                save_price_setting("recycled_private_price", np2)
+                save_price_setting("dump_volume", ndv)
+                st.success("저장되었습니다.")
                 st.rerun()
 
 
 # ─── 메인 앱 페이지 ───
 def show_main_page():
     user = st.session_state["user"]
-    role_label = "관리자" if user["role"] == "admin" else "일반"
-
     with st.sidebar:
+        role_label = "관리자" if user["role"] == "admin" else "일반"
         st.markdown(f"### {'🟢' if user['role']=='admin' else '🔵'} {user['name']} 님")
         st.caption(f"권한: {role_label}")
         if user["role"] == "admin":
@@ -685,19 +701,22 @@ def show_main_page():
     with col_left:
         st.subheader("🔧 견적 데이터 입력")
         with st.form("basic_info_form", clear_on_submit=False):
-            client = st.text_input("수신처", value=st.session_state.get("client",""), placeholder="입력하세요 (예: OO설계사무소)")
-            project = st.text_input("공사명", value=st.session_state.get("project",""), placeholder="입력하세요 (예: 세종시 OO공사)")
-            default_valid = st.session_state.get("valid_date", (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
+            client = st.text_input("수신처", value=st.session_state.get("client",""),
+                                   placeholder="입력하세요 (예: OO설계사무소)")
+            project = st.text_input("공사명", value=st.session_state.get("project",""),
+                                    placeholder="입력하세요 (예: 세종시 OO공사)")
+            default_valid = st.session_state.get("valid_date",
+                (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
             valid_date = st.text_input("유효기간", value=default_valid)
-            info_submitted = st.form_submit_button("✔ 기본정보 저장", use_container_width=True)
-            if info_submitted:
+            if st.form_submit_button("✔ 기본정보 저장", use_container_width=True):
                 st.session_state["client"] = client
                 st.session_state["project"] = project
                 st.session_state["valid_date"] = valid_date
 
         client = st.session_state.get("client", "")
         project = st.session_state.get("project", "")
-        valid_date = st.session_state.get("valid_date", (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
+        valid_date = st.session_state.get("valid_date",
+            (datetime.now() + timedelta(days=180)).strftime("%Y년 %m월 %d일"))
 
         tab_waste, tab_recycled = st.tabs(["♻️ 폐기물 처리", "🪨 순환골재 납품"])
 
@@ -708,134 +727,94 @@ def show_main_page():
                 waste_type = st.selectbox("폐기물 성상", list(waste_data.keys()))
                 qty = st.number_input("수량(ton)", min_value=0.01, value=1.0, step=0.1, format="%.2f")
                 dist_mode = st.selectbox("운반거리", ["30km","35km","40km","50km","60km","60km 초과"])
+                extra_dist = 0
                 if dist_mode == "60km 초과":
-                    extra_dist = st.number_input("실제거리(km, 60km 초과시)", min_value=61, value=70)
-                else:
-                    extra_dist = 0
+                    extra_dist = st.number_input("실제거리(km)", min_value=61, value=70)
                 holiday = st.checkbox("휴일/야간 할증(15%)")
-                waste_add = st.form_submit_button("➕ 폐기물 항목 추가", use_container_width=True)
-                if waste_add:
+                if st.form_submit_button("➕ 폐기물 항목 추가", use_container_width=True):
                     base = waste_data[waste_type]
                     transport = calculate_transport(dist_mode, extra_dist)
                     unit_price = base + transport
                     if holiday:
                         unit_price = int(unit_price * 1.15)
-                    amount = int(unit_price * qty)
                     dist_label = dist_mode if dist_mode != "60km 초과" else f"L={extra_dist}km"
                     st.session_state["waste_items"].append({
-                        "품명": waste_type,
-                        "규격": dist_label,
-                        "수량": qty,
-                        "단위": "ton",
-                        "운반비": transport,
-                        "처리비": base,
-                        "단가": unit_price,
-                        "금액": amount,
-                        "비고": ""
+                        "품명": waste_type, "규격": dist_label,
+                        "수량": qty, "단위": "ton",
+                        "운반비": transport, "처리비": base,
+                        "제품비": 0, "단가": unit_price,
+                        "금액": int(unit_price * qty), "비고": ""
                     })
                     st.rerun()
 
         # ── 순환골재 납품 탭 ──
         with tab_recycled:
-            quote_mode = st.radio(
-                "견적 모드",
-                ["설계견적", "관급견적", "사급견적"],
-                horizontal=True,
-                key="recycled_quote_mode"
-            )
-            delivery_mode = st.radio(
-                "납품 조건",
-                ["상차도", "도착도"],
-                horizontal=True,
-                key="recycled_delivery_mode"
-            )
-
+            quote_mode = st.radio("견적 모드", ["설계견적","관급견적","사급견적"],
+                                  horizontal=True, key="rc_qmode")
+            delivery_mode = st.radio("납품 조건", ["상차도","도착도"],
+                                     horizontal=True, key="rc_dmode")
+            is_gov = quote_mode in ["설계견적","관급견적"]
             gov_price = get_recycled_gov_price()
-            private_price = get_recycled_private_price()
+            priv_price = get_recycled_private_price()
             dump_vol = get_dump_volume()
 
-            is_gov = quote_mode in ["설계견적", "관급견적"]
-            auto_unit_price = gov_price if is_gov else private_price
-
             with st.form("recycled_form", clear_on_submit=False):
-                recycled_name = st.text_input("품명", placeholder="예: 순환골재(도로기층용)")
-                recycled_spec = st.text_input("규격", placeholder="예: 40mm")
+                r_name = st.text_input("품명", placeholder="예: 순환골재(도로기층용)")
+                r_spec = st.text_input("규격", placeholder="예: 40mm")
+                unit_sel = st.radio("수량 단위", ["m³","대 (25톤 덤프 기준)"],
+                                    horizontal=True, key="rc_unit")
+                r_qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
 
-                unit_type = st.radio("수량 단위", ["m³", "대 (25톤 덤프 기준)"], horizontal=True, key="recycled_unit_type")
-
-                recycled_qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
-
-                if unit_type == "m³":
-                    display_unit = "m³"
-                    if is_gov:
-                        product_price = st.number_input(
-                            f"제품비 단가 (원/m³) [관급 기준: {gov_price:,}원]",
-                            min_value=0, value=gov_price, step=100
-                        )
-                    else:
-                        product_price = st.number_input("제품비 단가 (원/m³)", min_value=0, value=private_price, step=100)
+                disp_unit = "m³" if unit_sel == "m³" else "대"
+                if unit_sel == "m³":
+                    base_p = gov_price if is_gov else priv_price
+                    hint = f"관급 기준: {gov_price:,}원/m³" if is_gov else f"사급: {priv_price:,}원/m³"
+                    prod_p = st.number_input(f"제품비 단가 (원/m³) [{hint}]",
+                                             min_value=0, value=base_p, step=100)
                 else:
-                    display_unit = "대"
-                    per_truck_gov = int(gov_price * dump_vol)
-                    per_truck_pri = int(private_price * dump_vol)
-                    if is_gov:
-                        product_price = st.number_input(
-                            f"제품비 단가 (원/대) [관급 기준: {per_truck_gov:,}원, {dump_vol}m³×{gov_price:,}원]",
-                            min_value=0, value=per_truck_gov, step=1000
-                        )
-                    else:
-                        product_price = st.number_input(
-                            f"제품비 단가 (원/대) [사급 기준: {per_truck_pri:,}원]",
-                            min_value=0, value=per_truck_pri, step=1000
-                        )
+                    base_p = int((gov_price if is_gov else priv_price) * dump_vol)
+                    hint = f"관급: {int(gov_price*dump_vol):,}원/대" if is_gov else f"사급: {int(priv_price*dump_vol):,}원/대"
+                    prod_p = st.number_input(f"제품비 단가 (원/대) [{hint}]",
+                                             min_value=0, value=base_p, step=1000)
 
-                # 운반비 (도착도만)
-                transport_price = 0
+                trans_p = 0
                 if delivery_mode == "도착도":
-                    transport_table = get_transport_table()
+                    tt = get_transport_table()
                     if is_gov:
-                        transport_options = list(transport_table.keys()) + ["60km 초과", "직접입력"]
-                        trans_select = st.selectbox("운반비 단가 선택", transport_options)
-                        if trans_select == "직접입력":
-                            transport_price = st.number_input("운반비 직접입력 (원)", min_value=0, value=0, step=100)
-                        elif trans_select == "60km 초과":
-                            extra_km = st.number_input("실제거리(km)", min_value=61, value=70)
-                            transport_price = calculate_transport("60km 초과", extra_km)
-                            st.info(f"계산된 운반비: {transport_price:,}원")
+                        t_opts = list(tt.keys()) + ["60km 초과","직접입력"]
+                        t_sel = st.selectbox("운반비 선택", t_opts)
+                        if t_sel == "직접입력":
+                            trans_p = st.number_input("운반비 직접입력(원)", min_value=0, value=0, step=100)
+                        elif t_sel == "60km 초과":
+                            ex_km = st.number_input("실제거리(km)", min_value=61, value=70)
+                            trans_p = calculate_transport("60km 초과", ex_km)
+                            st.info(f"운반비: {trans_p:,}원")
                         else:
-                            transport_price = transport_table.get(trans_select, 0)
-                            st.info(f"적용 운반비: {transport_price:,}원")
+                            trans_p = tt.get(t_sel, 0)
+                            st.info(f"운반비: {trans_p:,}원")
                     else:
-                        transport_price = st.number_input("운반비 단가 직접입력 (원)", min_value=0, value=0, step=100)
+                        trans_p = st.number_input("운반비 직접입력(원)", min_value=0, value=0, step=100)
 
-                recycled_add = st.form_submit_button("➕ 순환골재 항목 추가", use_container_width=True)
-                if recycled_add:
-                    amount = int((product_price + transport_price) * recycled_qty)
-                    remark_note = delivery_mode
+                if st.form_submit_button("➕ 순환골재 항목 추가", use_container_width=True):
+                    amt = int((prod_p + trans_p) * r_qty)
                     st.session_state["recycled_items"].append({
-                        "품명": recycled_name if recycled_name else "순환골재",
-                        "규격": recycled_spec,
-                        "수량": recycled_qty,
-                        "단위": display_unit,
-                        "운반비": transport_price,
-                        "처리비": 0,
-                        "제품비": product_price,
-                        "단가": product_price + transport_price,
-                        "금액": amount,
-                        "비고": remark_note
+                        "품명": r_name if r_name else "순환골재",
+                        "규격": r_spec, "수량": r_qty, "단위": disp_unit,
+                        "운반비": trans_p, "처리비": 0, "제품비": prod_p,
+                        "단가": prod_p + trans_p, "금액": amt,
+                        "비고": delivery_mode
                     })
                     st.rerun()
 
-    # ── 우측: 미리보기 ──
+    # ── 우측: 미리보기 및 출력 ──
     with col_right:
         st.subheader("🔍 견적 미리보기")
         all_items = st.session_state["waste_items"] + st.session_state["recycled_items"]
 
         for idx, item in enumerate(all_items):
             c1, c2 = st.columns([4, 1])
-            trans_v = item.get("운반비", 0)
-            price_v = item.get("제품비", item.get("처리비", item.get("단가", 0)))
-            c1.write(f"{idx+1}. **{item['품명']}** ({item['규격']}) : {item['수량']:.2f} {item['단위']} × {item['단가']:,.0f}원 = **{item['금액']:,.0f}원**")
+            c1.write(f"{idx+1}. **{item['품명']}** ({item['규격']}) : "
+                     f"{item['수량']:.2f} {item['단위']} × {item['단가']:,.0f}원 = **{item['금액']:,.0f}원**")
             if c2.button("삭제", key=f"del_item_{idx}"):
                 wi = len(st.session_state["waste_items"])
                 if idx < wi:
@@ -846,76 +825,67 @@ def show_main_page():
 
         total = sum(i["금액"] for i in all_items)
         remark_default = "1. 부가세 별도.\n2. 상차비 별도.\n3. 25.5톤 덤프 용적 17㎥ 적용."
-        remark = st.text_area("비고", value=st.session_state.get("remark_input", remark_default), height=80, key="remark_input")
+        remark = st.text_area("비고", value=st.session_state.get("remark_input", remark_default),
+                              height=80, key="remark_input")
 
-        # 담당자 옵션
         show_author = st.checkbox("담당자 정보 견적서에 포함", value=False, key="show_author_check")
-        author_name_default = user.get("name", "")
-        author_phone_default = user.get("phone", "")
+        a_name = user.get("name", "")
+        a_phone = user.get("phone", "")
         if show_author:
-            col_a1, col_a2 = st.columns(2)
-            author_name = col_a1.text_input("담당자 이름", value=author_name_default, key="author_name_input")
-            author_phone = col_a2.text_input("담당자 연락처", value=author_phone_default, key="author_phone_input")
-        else:
-            author_name = author_name_default
-            author_phone = author_phone_default
+            ca1, ca2 = st.columns(2)
+            a_name = ca1.text_input("담당자 이름", value=a_name, key="author_name_input")
+            a_phone = ca2.text_input("담당자 연락처", value=a_phone, key="author_phone_input")
 
         st.divider()
-
         if all_items:
-            # 미리보기 HTML
+            is_unit = any(it.get("비고","") in ["상차도","도착도"] for it in all_items)
             rows_html = "".join([
-                f"<tr><td style='padding:3px 5px;text-align:center'>{i+1}</td>"
-                f"<td style='padding:3px 5px'>{it['품명']}</td>"
-                f"<td style='padding:3px 5px'>{it['규격']}</td>"
-                f"<td style='padding:3px 5px;text-align:right'>{it['수량']:,.2f}</td>"
-                f"<td style='padding:3px 5px'>{it['단위']}</td>"
-                f"<td style='padding:3px 5px;text-align:right'>{int(it.get('운반비',0)):,}" + ("" if it.get('운반비',0)==0 else "") + "</td>"
-                f"<td style='padding:3px 5px;text-align:right'>{int(it.get('제품비',it.get('처리비',it.get('단가',0)))):,}</td>"
-                f"<td style='padding:3px 5px;text-align:right'>{it['금액']:,.0f}</td>"
-                f"<td style='padding:3px 5px;text-align:center'>{it.get('비고','')}</td></tr>"
+                f"<tr><td style='padding:2px 4px;text-align:center'>{i+1}</td>"
+                f"<td style='padding:2px 4px'>{it['품명']}</td>"
+                f"<td style='padding:2px 4px'>{it['규격']}</td>"
+                f"<td style='padding:2px 4px;text-align:right'>{it['수량']:,.2f}</td>"
+                f"<td style='padding:2px 4px'>{it['단위']}</td>"
+                f"<td style='padding:2px 4px;text-align:right'>{int(it.get('운반비',0)):,}</td>"
+                f"<td style='padding:2px 4px;text-align:right'>{int(it.get('제품비',it.get('처리비',it.get('단가',0)))):,}</td>"
+                f"<td style='padding:2px 4px;text-align:right'>{it['금액']:,.0f}</td>"
+                f"<td style='padding:2px 4px;text-align:center'>{it.get('비고','')}</td></tr>"
                 for i, it in enumerate(all_items)
             ])
-            is_unit_quote = all(it.get("비고","") in ["상차도","도착도",""] for it in all_items) and any(it.get("비고") in ["상차도","도착도"] for it in all_items)
-            total_display = f"본 견적은 단위 단가 견적임  ( ₩ - )" if is_unit_quote else f"일금 {num_to_kor(total)}  ( ₩ {total:,.0f} )"
-
+            total_disp = ("본 견적은 단위 단가 견적임  ( ₩ - )"
+                          if is_unit else f"일금 {num_to_kor(total)}  ( ₩ {total:,.0f} )")
             st.markdown(f"""
-<div style="border:1px solid #444;padding:12px;border-radius:6px;background:#1a1a2e;font-size:12px;">
-<h4 style="text-align:center;margin-top:0;letter-spacing:8px">견  적  서</h4>
-<p><b>수신:</b> {client if client else "(미입력)"} 귀중 &nbsp;&nbsp; <b>공사명:</b> {project if project else "(미입력)"}</p>
-<p><b>합계금액:</b> {total_display}</p>
-<table style="width:100%;border-collapse:collapse;border:1px solid #555;font-size:11px;">
-<thead><tr style="background:#2a2a4a;border-bottom:1px solid #555;">
-<th style="padding:3px 5px">No</th><th style="padding:3px 5px">품명</th><th style="padding:3px 5px">규격</th>
-<th style="padding:3px 5px">수량</th><th style="padding:3px 5px">단위</th>
-<th style="padding:3px 5px">운반비</th><th style="padding:3px 5px">처리/제품비</th>
-<th style="padding:3px 5px">금액</th><th style="padding:3px 5px">비고</th></tr></thead>
-<tbody>{rows_html}</tbody></table>
-</div>
+<div style="border:1px solid #444;padding:10px;border-radius:6px;background:#1a1a2e;font-size:11px;">
+<h4 style="text-align:center;letter-spacing:8px;margin:0 0 8px">견  적  서</h4>
+<p style="margin:2px"><b>수신:</b> {client if client else "(미입력)"} 귀중 &nbsp; <b>공사명:</b> {project if project else "(미입력)"}</p>
+<p style="margin:2px"><b>합계금액:</b> {total_disp}</p>
+<table style="width:100%;border-collapse:collapse;border:1px solid #555;margin-top:6px">
+<thead><tr style="background:#2a2a4a">
+<th style="padding:2px 4px;font-size:10px">No</th><th style="padding:2px 4px;font-size:10px">품명</th>
+<th style="padding:2px 4px;font-size:10px">규격</th><th style="padding:2px 4px;font-size:10px">수량</th>
+<th style="padding:2px 4px;font-size:10px">단위</th><th style="padding:2px 4px;font-size:10px">운반비</th>
+<th style="padding:2px 4px;font-size:10px">처리/제품비</th><th style="padding:2px 4px;font-size:10px">금액</th>
+<th style="padding:2px 4px;font-size:10px">비고</th></tr></thead>
+<tbody>{rows_html}</tbody></table></div>
 """, unsafe_allow_html=True)
 
+            pdf_total = 0 if is_unit else total
             actual_remark = st.session_state.get("remark_input", remark_default)
-            # PDF 합계금액: 단위 단가 견적이면 0으로 처리
-            pdf_total = 0 if is_unit_quote else total
             pdf_buf = generate_pdf(
-                client, project, all_items, actual_remark, valid_date, pdf_total,
-                user["name"], author_phone if show_author else "",
-                show_author=show_author
+                client, project, all_items, actual_remark, valid_date,
+                pdf_total, a_name, a_phone, show_author
             )
             fname = f"견적서_{client}_{datetime.now().strftime('%Y%m%d')}.pdf"
-            col_pdf, col_log = st.columns(2)
-            with col_pdf:
-                st.download_button(
-                    label="📄 PDF 다운로드",
-                    data=pdf_buf,
-                    file_name=fname,
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            with col_log:
-                if st.button("📝 견적 저장(로그기록)", use_container_width=True):
-                    append_log(user, client, project, valid_date, all_items, total)
-                    st.success("견적이 로그에 저장되었습니다!")
+
+            # PDF 다운로드 + 자동 저장
+            if st.download_button(
+                label="📄 PDF 다운로드 (자동저장)",
+                data=pdf_buf,
+                file_name=fname,
+                mime="application/pdf",
+                use_container_width=True
+            ):
+                append_log(user, client, project, valid_date, all_items, total)
+                st.success("견적이 로그에 자동 저장되었습니다!")
         else:
             st.info("항목을 추가하면 견적서 미리보기가 표시됩니다.")
 
